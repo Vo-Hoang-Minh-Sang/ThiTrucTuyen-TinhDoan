@@ -1,0 +1,35 @@
+{
+  "name": "be-thi-truc-tuyen-tinh-doan",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "db:migrate": "node src/migrate.js",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js",
+    "admin:bootstrap": "node scripts/bootstrap-admin.js",
+    "db:backup": "node scripts/backup-database.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.3.0",
+    "mysql2": "^3.14.1",
+    "nodemailer": "^10.0.2",
+    "reflect-metadata": "^0.2.2",
+    "typeorm": "^0.3.27",
+    "yauzl": "^3.4.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    },
+    "qs": "^6.16.0"
+  }
+}

@@ -1,0 +1,15 @@
+.env
+**/.env
+!.env.example
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+uploads/
+**/uploads/
+.test-build/
+**/.test-build/
+backups/
+*.log
+coverage/
+**/coverage/
