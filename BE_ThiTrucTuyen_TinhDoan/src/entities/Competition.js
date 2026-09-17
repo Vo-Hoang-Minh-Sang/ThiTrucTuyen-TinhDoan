@@ -12,6 +12,8 @@ export default new EntitySchema({
     end_date: { type: 'date' },
     duration_minutes: { type: Number, unsigned: true, default: 30 },
     max_attempts: { type: Number, unsigned: true, default: 1 },
+    // Điểm tối thiểu để được xét đi tiếp ở mọi vòng của kỳ thi.
+    passing_score: { type: 'decimal', precision: 5, scale: 2, default: 0 },
     start_at: { type: 'datetime', nullable: true },
     end_at: { type: 'datetime', nullable: true },
     status: { type: String, length: 20, default: 'draft' },

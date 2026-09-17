@@ -5,9 +5,9 @@ import test from 'node:test';
 import bcrypt from 'bcryptjs';
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { createAuthRouter } from '../src/auth.js';
-import { createRateLimiter, validateAuthConfiguration } from '../src/security.js';
-import { createAccess, assertCompetitionAccess } from '../src/access.js';
+import { createAuthRouter } from '../src/auth/auth.js';
+import { createRateLimiter, validateAuthConfiguration } from '../src/auth/security.js';
+import { createAccess, assertCompetitionAccess } from '../src/auth/access.js';
 
 const env = { JWT_SECRET: 'test-only-92e44e27f821672f9ae6187166154f04', JWT_EXPIRES_IN: '2h', NODE_ENV: 'test' };
 const registration = { hoten: 'Nguyễn Minh Anh', dienthoai: '0901234567', email: 'minhanh@example.com', password: 'StrongPass123!', donviID: 1 };

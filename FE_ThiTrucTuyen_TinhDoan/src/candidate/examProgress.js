@@ -9,7 +9,7 @@ export function recoverProgress(session, cached) {
   const allowed = new Set(session.questions.map(question => String(question.id)));
   if (!cached.answers || typeof cached.answers !== 'object' || Array.isArray(cached.answers)) return null;
   if (Object.entries(cached.answers).some(([id, answer]) => !allowed.has(id) || !['A', 'B', 'C', 'D'].includes(answer))) return null;
-  return { ...cached.answers };
+  return { answers: { ...cached.answers } };
 }
 export function readCache(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
 export function writeCache(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } }

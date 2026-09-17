@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
 import express from 'express';
-import { createPublicRouter, examToPayload } from '../src/public.js';
+import { createPublicRouter, examToPayload } from '../src/exam/public.js';
 
 async function serve(t, pool) {
   // Mỗi ca kiểm thử tự cấp cổng localhost và đóng server khi hoàn tất.
@@ -68,4 +68,19 @@ test('dashboard exposes result records separately from exams with null duration 
   assert.equal(data.results[0].score, 85);
   assert.equal(data.results[0].durationSeconds, null);
   assert.equal(data.statistics.units[0].totalTests, 1);
+});
+
+test('dashboard statistics only count registrations and attempts of the displayed competition', async t => {
+  const statisticParams = [];
+  const base = await serve(t, { query: async (sql, values = []) => {
+    if (sql.includes('FROM competitions')) return [[{ id: 42, name: 'Kỳ thi được ghim', status: 'published', start_date: '2026-09-01', end_date: '2026-09-30' }]];
+    if (sql.includes('FROM rounds WHERE')) return [[]];
+    if (sql.includes('SELECT r.id, u.hoten')) return [[]];
+    if (sql.includes('SELECT\n        (SELECT COUNT(*) FROM competition_registrations')) { statisticParams.push(values); return [[{ totalRegistrations: '2', totalTests: '7' }]]; }
+    if (sql.includes('FROM donvi d')) { statisticParams.push(values); return [[]]; }
+    return [[]];
+  } });
+  const { data } = await (await fetch(`${base}/dashboard`)).json();
+  assert.deepEqual(data.statistics, { totalRegistrations: 2, totalTests: 7, units: [] });
+  assert.deepEqual(statisticParams, [[42, 42], [42, 42]]);
 });

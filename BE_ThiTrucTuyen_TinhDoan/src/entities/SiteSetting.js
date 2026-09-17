@@ -33,10 +33,12 @@ export default new EntitySchema({
       "length": 255,
       "nullable": true
     },
+    "banners_json": { "type": "json", "nullable": true },
+    "news_json": { "type": "json", "nullable": true },
+    "pinned_competition_id": { "type": "int", "nullable": true },
     "updated_at": {
       "type": "datetime",
       "createDate": true
     }
   }
 });
-

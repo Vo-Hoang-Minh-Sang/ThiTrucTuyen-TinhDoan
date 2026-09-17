@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createAccess, requireRoles } from './access.js';
+import { createAccess, requireRoles } from '../auth/access.js';
 import { createCandidateService, examError } from './exam-service.js';
 
 export { finalizeExpiredSessions } from './exam-service.js';
@@ -57,8 +57,8 @@ export function createCandidateRouter({ pool, env = process.env }) {
     response.json({ success: true, item: await service.register(request.user.id, id(request.params.id)) });
   }));
   router.post('/competitions/:id/start', route(async (request, response) => {
-    body(request);
-    response.json({ success: true, item: await service.start(request.user.id, id(request.params.id)) });
+    const data = body(request);
+    response.json({ success: true, item: await service.start(request.user.id, id(request.params.id), data.roundId == null ? undefined : id(String(data.roundId))) });
   }));
   router.get('/sessions/:id', route(async (request, response) => {
     response.json({ success: true, item: await service.session(request.user.id, id(request.params.id)) });

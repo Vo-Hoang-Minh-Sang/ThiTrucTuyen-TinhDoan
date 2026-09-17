@@ -10,7 +10,8 @@
     "test": "node --test test/*.test.js",
     "check": "node scripts/check.js",
     "admin:bootstrap": "node scripts/bootstrap-admin.js",
-    "db:backup": "node scripts/backup-database.js"
+    "db:backup": "node scripts/backup-database.js",
+    "db:clear-exam-data": "node scripts/clear-exam-data.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

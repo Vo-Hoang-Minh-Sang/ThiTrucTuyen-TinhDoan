@@ -5,6 +5,10 @@ export default new EntitySchema({
   name: 'Result',
   tableName: 'results',
   columns: {
+    started_at: { type: 'datetime', nullable: true },
+    duration_seconds: { type: Number, unsigned: true, nullable: true },
+    round_rank: { type: Number, unsigned: true, nullable: true },
+    advanced: { type: Boolean, nullable: true },
     id: { type: 'bigint', unsigned: true, primary: true, generated: 'increment' },
     user_id: { type: Number, unsigned: true },
     exam_id: { type: Number, unsigned: true },

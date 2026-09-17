@@ -27,7 +27,7 @@ test('isolated MySQL: migrations, public API and account recovery', {
   Object.assign(process.env, {
     DB_HOST: '127.0.0.1', DB_PORT: String(port), DB_USER: 'root', DB_PASSWORD: '',
     DB_NAME: `integration_${randomUUID().replaceAll('-', '')}`, NODE_ENV: 'development',
-    SEED_DEMO_DATA: 'false', OTP_ENABLED: 'true', OTP_DEV_MODE: 'false', OTP_EXPIRES_MINUTES: '5',
+    OTP_ENABLED: 'true', OTP_DEV_MODE: 'false', OTP_EXPIRES_MINUTES: '5',
     JWT_SECRET: randomBytes(32).toString('hex'), JWT_EXPIRES_IN: '2h', CLIENT_URL: 'http://localhost:5173'
   });
   const { initializeDatabase, closeDatabase, pool } = await import('../src/db.js');
@@ -53,7 +53,7 @@ test('isolated MySQL: migrations, public API and account recovery', {
     }
     await initializeDatabase();
     const [[migration]] = await pool.query('SELECT COUNT(*) AS total FROM schema_migrations');
-    assert.equal(Number(migration.total), 2);
+    assert.equal(Number(migration.total), 3);
 
     const emails = [];
     // Mô phỏng cả gửi thành công lẫn sự cố SMTP, không gửi email ra ngoài.
@@ -77,20 +77,9 @@ test('isolated MySQL: migrations, public API and account recovery', {
     assert.deepEqual(emptyDashboard.results, []);
     assert.equal(emptyDashboard.statistics.totalRegistrations, 0);
 
-    await initializeDatabase({ seed: true });
-    await initializeDatabase({ seed: true });
-    // Dữ liệu cũ mặc định là bản nháp; chỉ hiển thị công khai sau khi xuất bản rõ ràng.
-    assert.deepEqual(await get('/exams'), []);
-    assert.equal((await get('/dashboard')).competition, null);
-    await pool.query("UPDATE competitions SET status='published',start_at=TIMESTAMP(start_date),end_at=TIMESTAMP(end_date,'23:59:59')");
-    await pool.query('UPDATE exams SET is_published=1');
-    const exams = await get('/exams');
-    assert.equal(exams.length, 3);
-    assert.ok(exams.every((exam) => exam.questions === 1 && exam.startAt && exam.endAt));
-    const seededDashboard = await get('/dashboard');
-    assert.equal(seededDashboard.rounds.length, 4);
-    assert.equal(seededDashboard.statistics.totalRegistrations, 1);
-    assert.equal(seededDashboard.statistics.totalTests, 0);
+    // Test tự tạo dữ liệu tối thiểu cần thiết, không phụ thuộc dữ liệu mẫu của ứng dụng.
+    const [organization] = await pool.query("INSERT INTO doancoso (ten) VALUES ('Đoàn cơ sở kiểm thử')");
+    await pool.query("INSERT INTO donvi (ten,doanCoSoID) VALUES ('Đơn vị kiểm thử', ?)", [organization.insertId]);
     const [units] = await pool.query('SELECT id FROM donvi');
     assert.equal(units.length, 1);
 
@@ -118,16 +107,7 @@ test('isolated MySQL: migrations, public API and account recovery', {
     assert.equal((await request('/auth/logout', {}, relogin.body.token)).status, 200);
     assert.equal((await request('/auth/me', undefined, relogin.body.token)).status, 401);
 
-    const [session] = await pool.query(`INSERT INTO user_exam_sessions (user_id, exam_id, question_ids, started_at, finished_at, score)
-      VALUES (?, ?, JSON_ARRAY(1), DATE_SUB(NOW(), INTERVAL 42 SECOND), NOW(), 75)`, [pending.id, exams[0].id]);
-    await pool.query('INSERT INTO results (user_id, exam_id, session_id, score, finished_at) VALUES (?, ?, ?, 75, NOW())', [pending.id, exams[0].id, session.insertId]);
-    const dashboard = await get('/dashboard');
-    assert.equal(dashboard.statistics.totalRegistrations, 2);
-    assert.equal(dashboard.statistics.totalTests, 1);
-    assert.equal(dashboard.results[0].fullName, account.hoten);
-    assert.equal(dashboard.results[0].score, 75);
-    assert.equal(dashboard.results[0].durationSeconds, 42);
-    context.diagnostic('Fresh/repeated migration, idempotent seed, empty/populated public queries, SMTP recovery, concurrent OTP consumption and token revocation passed against isolated MySQL.');
+    context.diagnostic('Migration trên database trống, đăng ký OTP, thu hồi token và xử lý đồng thời đã đạt mà không cần dữ liệu mẫu.');
   } finally {
     // Luôn đóng server HTTP và kết nối; giữ database kiểm thử để có thể kiểm tra lại.
     if (server) {

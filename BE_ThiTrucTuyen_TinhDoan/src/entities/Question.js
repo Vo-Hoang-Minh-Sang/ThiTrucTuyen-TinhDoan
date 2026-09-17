@@ -5,6 +5,7 @@ export default new EntitySchema({
   name: 'Question',
   tableName: 'questions',
   columns: {
+    round_id: { type: Number, unsigned: true, nullable: true },
     competition_id: { type: Number, unsigned: true, nullable: true },
     topic: { type: String, length: 120, default: 'Chung' },
     difficulty: { type: String, length: 20, default: 'medium' },

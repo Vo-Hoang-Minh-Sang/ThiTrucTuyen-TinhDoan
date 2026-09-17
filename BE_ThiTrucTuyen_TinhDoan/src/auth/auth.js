@@ -203,7 +203,11 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
     // Khóa tài khoản khi cấp phiên để việc đổi mật khẩu không tạo JWT từ mật khẩu cũ.
     const session = await pool.transaction(async tx => {
       const user = await findUser(tx, identifier, true);
-      if (!user || Number(user.is_active) !== 1 || !['candidate', 'teacher', 'admin'].includes(user.role) || !(await bcrypt.compare(password, user.password))) return null;
+      if (!user || Number(user.is_active) !== 1 || !['candidate', 'teacher', 'admin'].includes(user.role) || typeof user.password !== 'string') return null;
+      // Dữ liệu tài khoản cũ có thể chứa chuỗi mật khẩu băm hỏng; trả lỗi đăng nhập thay vì làm hỏng toàn bộ API.
+      let passwordMatches = false;
+      try { passwordMatches = await bcrypt.compare(password, user.password); } catch { return null; }
+      if (!passwordMatches) return null;
       const jti = crypto.randomUUID();
       const token = jwt.sign({ sub: String(user.id), ver: Number(user.token_version || 0) }, config.secret, { jwtid: jti, expiresIn: config.expiresIn, algorithm: 'HS256' });
       const expiresAt = new Date(jwt.decode(token).exp * 1000);

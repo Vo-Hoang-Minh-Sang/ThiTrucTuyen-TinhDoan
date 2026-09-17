@@ -3,12 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAccess, requireRoles } from './access.js';
-import { audit, fail, route, textField } from './http.js';
+import { createAccess, requireRoles } from '../auth/access.js';
+import { audit, fail, route, textField } from '../common/http.js';
 import { inspectOfficeArchive, upload } from './files.js';
 
 export const uploadsDirectory = path.resolve(process.env.UPLOAD_DIR || fileURLToPath(new URL('../uploads/', import.meta.url)));
-const settingsPayload = row => ({ title: row?.title || 'Thi trực tuyến Tỉnh Đoàn', description: row?.description || '', bannerUrl: row?.banner_url || '', newsUrl: row?.news_url || '', newsTitle: row?.news_title || '' });
+const jsonList = value => { try { const list = typeof value === 'string' ? JSON.parse(value) : value; return Array.isArray(list) ? list.filter(item => item?.url && item?.title).slice(0, 20) : []; } catch { return []; } };
+const settingsPayload = row => ({ title: row?.title || 'Thi trực tuyến Tỉnh Đoàn', description: row?.description || '', bannerUrl: row?.banner_url || '', newsUrl: row?.news_url || '', newsTitle: row?.news_title || '', pinnedCompetitionId: row?.pinned_competition_id || null, banners: jsonList(row?.banners_json), news: jsonList(row?.news_json) });
+const assetId = (url, kind) => {
+  if (typeof url !== 'string' || !/^\/api\/assets\/[0-9a-f-]{36}$/.test(url)) throw fail(400, 'Hãy sử dụng tệp đã tải lên hệ thống.');
+  return { id: url.split('/').at(-1), kind };
+};
 export async function detectAsset(file, kind) {
   if (!file?.size || !['banner', 'news'].includes(kind)) throw fail(400, 'Vui lòng chọn tệp và loại nội dung hợp lệ.');
   const b = file.buffer;
@@ -57,20 +62,33 @@ export function createSiteRouter({ pool }) {
     } catch (error) { await unlink(path.join(uploadsDirectory, filename)).catch(() => {}); throw error; }
     res.status(201).json({ success: true, item: { url: `/api/assets/${id}`, name: req.file.originalname, kind } });
   }));
+  router.put('/manage/site/pin-competition', createAccess({ pool }), requireRoles('admin'), route(async (req, res) => {
+    const competitionId = req.body?.competitionId ? Number(req.body.competitionId) : null;
+    if (competitionId && (!Number.isSafeInteger(competitionId) || competitionId < 1)) throw fail(400, 'Kỳ thi không hợp lệ.');
+    if (competitionId) { const [[competition]] = await pool.query("SELECT id FROM competitions WHERE id=? AND status IN ('published','closed')", [competitionId]); if (!competition) throw fail(400, 'Chỉ có thể ghim kỳ thi đã công bố.'); }
+    await pool.query('INSERT INTO site_settings (id,title,pinned_competition_id) VALUES (1,?,?) ON DUPLICATE KEY UPDATE pinned_competition_id=VALUES(pinned_competition_id),updated_at=NOW()', ['Thi trực tuyến Tỉnh Đoàn', competitionId]);
+    res.json({ success: true, pinnedCompetitionId: competitionId });
+  }));
   router.put('/manage/site', createAccess({ pool }), requireRoles('admin'), route(async (req, res) => {
     const title = textField(req.body.title, 'Tiêu đề'), description = textField(req.body.description, 'Mô tả', 10000, true), newsTitle = textField(req.body.newsTitle, 'Tiêu đề tin tức', 255, true);
     const bannerUrl = req.body.bannerUrl || '', newsUrl = req.body.newsUrl || '';
-    for (const [url, kind] of [[bannerUrl, 'banner'], [newsUrl, 'news']]) {
+    const lists = { banners: Array.isArray(req.body.banners) ? req.body.banners : [], news: Array.isArray(req.body.news) ? req.body.news : [] };
+    if (lists.banners.length > 20 || lists.news.length > 50) throw fail(400, 'Số lượng banner hoặc tin tức vượt giới hạn.');
+    for (const item of [...lists.banners, ...lists.news]) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw fail(400, 'Nội dung trang chủ không hợp lệ.');
+      item.title = textField(item.title, 'Tiêu đề', 255);
+    }
+    for (const [url, kind] of [[bannerUrl, 'banner'], [newsUrl, 'news'], ...lists.banners.map(item => [item.url, 'banner']), ...lists.news.map(item => [item.url, 'news'])]) {
       if (!url) continue;
-      if (typeof url !== 'string' || !/^\/api\/assets\/[0-9a-f-]{36}$/.test(url)) throw fail(400, 'Hãy sử dụng tệp đã tải lên hệ thống.');
-      const [[asset]] = await pool.query('SELECT id FROM site_assets WHERE id=? AND kind=?', [url.split('/').at(-1), kind]);
+      const assetInput = assetId(url, kind);
+      const [[asset]] = await pool.query('SELECT id FROM site_assets WHERE id=? AND kind=?', [assetInput.id, assetInput.kind]);
       if (!asset) throw fail(400, 'Tệp không tồn tại hoặc không đúng loại.');
     }
     await pool.transaction(async tx => {
-      await tx.query('INSERT INTO site_settings (id,title,description,banner_url,news_url,news_title) VALUES (1,?,?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),banner_url=VALUES(banner_url),news_url=VALUES(news_url),news_title=VALUES(news_title),updated_at=NOW()', [title, description, bannerUrl || null, newsUrl || null, newsTitle]);
+      await tx.query('INSERT INTO site_settings (id,title,description,banner_url,news_url,news_title,banners_json,news_json) VALUES (1,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),banner_url=VALUES(banner_url),news_url=VALUES(news_url),news_title=VALUES(news_title),banners_json=VALUES(banners_json),news_json=VALUES(news_json),updated_at=NOW()', [title, description, bannerUrl || null, newsUrl || null, newsTitle, JSON.stringify(lists.banners), JSON.stringify(lists.news)]);
       await audit(tx, req.user.id, 'site.apply', 'site', 1);
     });
-    res.json({ success: true, item: { title, description, bannerUrl, newsUrl, newsTitle }, message: 'Đã áp dụng giao diện và tin tức.' });
+    res.json({ success: true, item: { title, description, bannerUrl, newsUrl, newsTitle, ...lists }, message: 'Đã áp dụng giao diện và tin tức.' });
   }));
   return router;
 }

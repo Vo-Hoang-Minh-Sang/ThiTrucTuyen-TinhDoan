@@ -33,7 +33,7 @@ npm run dev
 - `results.session_id` nullable và duy nhất; khi có liên kết, API tính thời gian làm bài từ phiên thi. Kết quả cũ chưa có liên kết hiển thị “Chưa ghi nhận” thời gian.
 - Migration nền không tự rollback bằng cách xóa bảng. Sao lưu database theo quy trình triển khai trước khi nâng cấp.
 
-Seed mặc định **tắt**. Chỉ khi `NODE_ENV=development` hoặc `demo` và `SEED_DEMO_DATA=true`, hệ thống bổ sung dữ liệu minh họa: tổ chức/đơn vị, 3 đề, 3 câu hỏi, 1 cuộc thi, 4 vòng và tài khoản `minhanh@example.com` / `123456`. Không tạo số liệu thống kê giả. Bật seed chỉ trên database thử nghiệm.
+Hệ thống không tự tạo dữ liệu mẫu. Sau khi chạy migration, quản trị viên tạo kỳ thi, vòng thi, ngân hàng câu hỏi và đề thi từ giao diện quản lý.
 
 ## API
 

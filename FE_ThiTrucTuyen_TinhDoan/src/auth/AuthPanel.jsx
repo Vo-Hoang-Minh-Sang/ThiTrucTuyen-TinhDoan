@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from './api';
+import { api } from '../shared/api';
 
 const initialForm = { hoten: '', dienthoai: '', email: '', donviID: '', identifier: '', password: '' };
 const titles = { login: 'Đăng nhập', register: 'Đăng ký tài khoản', forgot: 'Quên mật khẩu' };
@@ -43,8 +43,8 @@ export default function AuthPanel({ units = [], unitsError, onAuthenticated }) {
         <label>Đơn vị<select name="donviID" value={form.donviID} onChange={update} required><option value="">Chọn đơn vị</option>{units.map(unit => <option key={unit.id} value={unit.id}>{unit.ten}</option>)}</select></label>
         {!units.length && <p className="form-note">{unitsError || 'Chưa có đơn vị đăng ký. Vui lòng liên hệ ban tổ chức.'}</p>}
       </>}
-      {mode !== 'register' && <label>Số điện thoại hoặc email<input name="identifier" value={form.identifier} onChange={update} autoComplete="username" maxLength={255} required /></label>}
-      {mode !== 'forgot' && <label>Mật khẩu<input name="password" type="password" value={form.password} onChange={update} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} minLength={mode === 'register' ? 8 : undefined} required /></label>}
+      {mode !== 'register' && <input aria-label="Số điện thoại hoặc email" name="identifier" placeholder="Số điện thoại hoặc email" value={form.identifier} onChange={update} autoComplete="username" maxLength={255} required />}
+      {mode !== 'forgot' && (mode === 'login' ? <input aria-label="Mật khẩu" name="password" type="password" placeholder="Mật khẩu" value={form.password} onChange={update} autoComplete="current-password" required /> : <label>Mật khẩu<input name="password" type="password" value={form.password} onChange={update} autoComplete="new-password" minLength={8} required /></label>)}
       {mode === 'register' && <p className="form-note">Mật khẩu tối thiểu 8 ký tự, tối đa 72 byte UTF-8.</p>}
       <button type="submit" disabled={mode === 'register' && !units.length}>{loading ? 'Đang xử lý…' : mode === 'forgot' ? 'Gửi yêu cầu hỗ trợ' : titles[mode]}</button>
     </fieldset></form>

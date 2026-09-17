@@ -1,9 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from './api';
+import { api } from '../shared/api';
 import { activeKey, progressKey, readCache, recoverProgress, removeCache, remainingSeconds, writeCache } from './examProgress';
-import { CompetitionSelect, DateFilters, Notice, ResourceState, Table, formatDate, queryString, statusNames, useAction, useResource } from './ui';
+import { CompetitionSelect, DateFilters, Notice, ResourceState, Table, formatDate, queryString, useAction, useResource } from '../shared/ui';
+
+const roundStates = new Set(['COMPLETED', 'AVAILABLE', 'LOCKED']);
+// Mã trạng thái vẫn dùng để quyết định quyền làm bài; chỉ phần chữ hiển thị được Việt hóa cho thí sinh.
+const roundStatus = (value, scheduleStatus) => {
+  if (!roundStates.has(value)) return 'Chưa cập nhật trạng thái';
+  if (scheduleStatus === 'upcoming') return 'Chưa diễn ra';
+  if (scheduleStatus === 'ended' || value === 'COMPLETED') return 'Đã kết thúc';
+  if (value === 'AVAILABLE') return 'Đang diễn ra';
+  return 'Đóng';
+};
+const competitionStatus = value => ({ unscheduled: 'Chưa có lịch', upcoming: 'Chưa diễn ra', active: 'Đang diễn ra', ended: 'Đã kết thúc', closed: 'Đóng' }[value] || 'Chưa cập nhật trạng thái');
+const officialScore = value => value == null ? 'Chưa có điểm' : `${Number(value).toLocaleString('vi-VN')} / 100`;
+const officialDuration = value => value == null ? 'Chưa có thời gian chính thức' : `${Math.floor(value / 60)} phút ${value % 60} giây`;
+// Chỉ thông báo đậu/rớt sau khi backend đã chốt xếp hạng của vòng.
+const advancement = value => value === true ? 'Được vào vòng tiếp theo' : value === false ? 'Không được vào vòng tiếp theo' : 'Kết quả sẽ được công bố sau khi vòng thi kết thúc.';
 
 export default function CandidateWorkspace({ user, token }) {
+  const [selectedRounds,setSelectedRounds]=useState({});
+  // Tách tra cứu kết quả khỏi danh sách kỳ thi để thí sinh tập trung vào từng tác vụ.
+  const [workspaceTab, setWorkspaceTab] = useState('exams');
+  const [competitionTab, setCompetitionTab] = useState('current');
   const [filters, setFilters] = useState({ from: '', to: '' });
   const [competitionId, setCompetitionId] = useState('');
   const [refresh, setRefresh] = useState(0);
@@ -13,6 +32,10 @@ export default function CandidateWorkspace({ user, token }) {
   const competitions = useResource(`/candidate/competitions?${queryString(filters)}`, token, refresh);
   const results = useResource(`/candidate/results?${queryString({ competitionId })}`, token, refresh);
   const items = competitions.data?.items || [];
+  // Kỳ thi đã đóng hoặc qua thời điểm kết thúc được tách riêng để danh sách đang diễn ra dễ theo dõi.
+  const ended = item => item.status === 'closed' || item.status === 'ended' || (item.endAt && Date.parse(item.endAt) <= Date.now());
+  const visibleItems = items.filter(item => competitionTab === 'ended' ? ended(item) : !ended(item))
+    .sort((left, right) => competitionTab === 'ended' ? Date.parse(right.endAt || 0) - Date.parse(left.endAt || 0) : 0);
   useEffect(() => {
     const id = readCache(activeKey(user.id));
     if (!id) { setRestoring(false); return; }
@@ -22,22 +45,27 @@ export default function CandidateWorkspace({ user, token }) {
   }, [user.id, token]);
   async function start(item) {
     await action.run(async () => {
-      const payload = item.activeSessionId ? await api(`/candidate/sessions/${item.activeSessionId}`, { token }) : await api(`/candidate/competitions/${item.id}/start`, { token, body: {} });
+      if (!item.registered) throw new Error('Bạn cần đăng ký cuộc thi này trước khi làm bài.');
+      // Không suy ra quyền bắt đầu từ lịch, số lượt hay eligible; dùng trạng thái backend yêu cầu.
+      if (item.roundId && !item.activeSessionId && item.status !== 'AVAILABLE') throw new Error('Vòng thi hiện chưa mở để bắt đầu làm bài.');
+      const payload = item.activeSessionId ? await api(`/candidate/sessions/${item.activeSessionId}`, { token }) : await api(`/candidate/competitions/${item.id}/start`, { token, body: {roundId:item.roundId} });
       writeCache(activeKey(user.id), payload.item.id); setSession(payload.item);
     }, '');
   }
   if (session) return <ExamRunner key={session.id} initial={session} userId={user.id} token={token} onExit={() => { setSession(null); removeCache(activeKey(user.id)); setRefresh(value => value + 1); }} />;
-  return <>
-    <section className="content-section"><div className="section-heading"><div><h2>Kỳ thi của bạn</h2><p className="section-note">Đăng ký, xem lịch và tiếp tục bài thi đang làm.</p></div><button className="secondary" onClick={() => setRefresh(value => value + 1)}>Tải lại</button></div>
-      <div className="form-grid filters"><DateFilters value={filters} onChange={setFilters} /></div><Notice {...action} />
+  return <><nav className="tab-nav competition-tabs" aria-label="Khu vực thí sinh"><button type="button" className={workspaceTab === 'exams' ? 'active' : ''} aria-pressed={workspaceTab === 'exams'} onClick={() => setWorkspaceTab('exams')}>Kỳ thi</button><button type="button" className={workspaceTab === 'results' ? 'active' : ''} aria-pressed={workspaceTab === 'results'} onClick={() => setWorkspaceTab('results')}>Kết quả</button></nav>
+    {workspaceTab === 'exams' && <section className="content-section"><div className="section-heading"><div><h2>Kỳ thi của bạn</h2><p className="section-note">Đăng ký, xem lịch và tiếp tục bài thi đang làm.</p></div><button className="secondary" onClick={() => setRefresh(value => value + 1)}>Tải lại</button></div>
+      <div className="form-grid filters"><DateFilters value={filters} onChange={setFilters} /></div><nav className="tab-nav competition-tabs" aria-label="Nhóm kỳ thi"><button type="button" className={competitionTab === 'current' ? 'active' : ''} aria-pressed={competitionTab === 'current'} onClick={() => setCompetitionTab('current')}>Kỳ thi đang mở</button><button type="button" className={competitionTab === 'ended' ? 'active' : ''} aria-pressed={competitionTab === 'ended'} onClick={() => setCompetitionTab('ended')}>Kỳ thi đã kết thúc</button></nav><Notice {...action} />
       {restoring && <p role="status">Đang kiểm tra bài thi đang làm…</p>}
-      <ResourceState resource={competitions} empty={!items.length}><div className="exam-grid">{items.map(item => <article className="exam-card" key={item.id}>
-        <span className="exam-status">{statusNames[item.status] || item.status}</span><h3>{item.name}</h3><p>{item.description}</p><p>{formatDate(item.startAt)} → {formatDate(item.endAt)}</p><p>{item.durationMinutes} phút / lượt · Tối đa {item.maxAttempts} lượt</p><p><strong>Còn {item.attemptsRemaining} lượt</strong> · Đã dùng {item.attemptsUsed}</p>
+      <ResourceState resource={competitions} empty={!visibleItems.length}><div className="exam-grid">{visibleItems.map(competition => { const round=competition.rounds?.find(r=>String(r.id)===String(selectedRounds[competition.id]||competition.currentRoundId)); const item={...competition,...(round?{...round,id:competition.id,roundId:round.id,name:competition.name,roundName:round.name}:{})}; return <article className="exam-card" key={item.id}>
+        <span className="exam-status">{item.roundId ? roundStatus(item.status, item.scheduleStatus) : competitionStatus(item.status)}</span><h3>{item.name}</h3>{competition.currentRoundId && <p>Vòng hiện tại: {competition.rounds?.find(r=>String(r.id)===String(competition.currentRoundId))?.name || 'Chưa có tên vòng từ backend'}</p>}{competition.rounds?.length>0&&<label>Vòng thi<select value={item.roundId||''} onChange={event=>setSelectedRounds({...selectedRounds,[competition.id]:event.target.value})}>{competition.rounds.map(r=><option key={r.id} value={r.id}>{r.roundNumber}. {r.name}</option>)}</select></label>}<p>{item.description}</p>{item.eligibilityMessage&&<p>{item.eligibilityMessage}</p>}<p>{formatDate(item.startAt)} → {formatDate(item.endAt)}</p><p>{item.durationMinutes} phút / lượt · Tối đa {item.maxAttempts} lượt{item.roundId ? ' / vòng' : ''}</p><p><strong>Còn {item.attemptsRemaining} lượt{item.roundId ? ' của vòng' : ''}</strong> · Đã dùng {item.attemptsUsed}</p>
         <div className="actions">{!item.registered && <button disabled={action.busy} className="secondary" onClick={() => action.run(async () => { await api(`/candidate/competitions/${item.id}/register`, { token, body: {} }); setRefresh(value => value + 1); }, 'Đã đăng ký kỳ thi.')}>Đăng ký kỳ thi</button>}
-          <button disabled={action.busy || restoring || (!item.activeSessionId && (item.attemptsRemaining <= 0 || item.status !== 'active'))} onClick={() => start(item)}>{item.activeSessionId ? 'Tiếp tục làm bài' : 'Bắt đầu làm bài'}</button></div>
-      </article>)}</div></ResourceState>
-    </section>
-    <section className="content-section"><h2>Tra cứu kết quả của bạn</h2><div className="form-grid filters"><CompetitionSelect items={items} value={competitionId} onChange={setCompetitionId} /></div><ResourceState resource={results} empty={!results.data?.items?.length}><Table headings={['Kỳ thi', 'Đề thi', 'Lượt', 'Điểm / 100', 'Hoàn thành']} label="Kết quả cá nhân">{results.data?.items?.map(item => <tr key={item.id}><td>{item.competitionName}</td><td>{item.examName}</td><td>{item.attemptNumber}</td><td><strong>{Number(item.score).toLocaleString('vi-VN')}</strong></td><td>{formatDate(item.finishedAt)}</td></tr>)}</Table></ResourceState></section>
+          <button disabled={!item.registered || action.busy || restoring || (!item.activeSessionId && (item.roundId ? item.status !== 'AVAILABLE' : item.attemptsRemaining <= 0 || item.status !== 'active'))} onClick={() => start(item)}>{item.activeSessionId ? 'Tiếp tục làm bài' : 'Bắt đầu làm bài'}</button></div>
+        {competition.rounds?.length > 0 && <details><summary>Chi tiết cuộc thi · Danh sách vòng</summary><Table headings={['Vòng', 'Lịch thi', 'Trạng thái', 'Thao tác']} label={`Các vòng của ${competition.name}`}>{competition.rounds.map(r=><tr key={r.id}><td>{r.roundNumber}. {r.name}</td><td>{formatDate(r.startAt)} → {formatDate(r.endAt)}</td><td>{roundStatus(r.status, r.scheduleStatus)}</td><td><button className="secondary" onClick={()=>setSelectedRounds({...selectedRounds,[competition.id]:r.id})}>Chọn vòng {r.roundNumber}</button></td></tr>)}</Table></details>}
+        {item.roundId && !roundStates.has(item.status) && <p role="status">Hệ thống chưa cập nhật trạng thái vòng thi. Chức năng bắt đầu bài đang tạm đóng.</p>}
+        <p className="section-note">{item.registered ? 'Đã đăng ký cuộc thi.' : 'Bạn cần đăng ký cuộc thi trước khi bắt đầu làm bài.'}</p>
+      </article>;})}</div></ResourceState>
+    </section>}{workspaceTab === 'results' && <section className="content-section"><h2>Tra cứu kết quả của bạn</h2><div className="form-grid filters"><CompetitionSelect items={items} value={competitionId} onChange={setCompetitionId} /></div><ResourceState resource={results} empty={!results.data?.items?.length}><Table headings={['Kỳ thi / vòng', 'Lượt', 'Điểm / 100', 'Bắt đầu', 'Nộp bài', 'Thời gian', 'Hạng', 'Đi tiếp']} label="Kết quả cá nhân">{results.data?.items?.map(item => <tr key={item.id}><td>{item.competitionName}<br />{item.roundName}</td><td>{item.attemptNumber}</td><td><strong>{officialScore(item.score)}</strong></td><td>{formatDate(item.startedAt)}</td><td>{formatDate(item.finishedAt)}</td><td>{officialDuration(item.durationSeconds)}</td><td>{item.roundRank??'—'}</td><td>{advancement(item.advanced)}</td></tr>)}</Table></ResourceState></section>}
   </>;
 }
 
@@ -46,19 +74,21 @@ export function ExamRunner({ initial, token, userId, onExit }) {
   const key = progressKey(userId, initial.id);
   const recovered = useRef(recoverProgress(initial, readCache(key)));
   const [session, setSession] = useState(initial);
-  const [answers, setAnswers] = useState(() => recovered.current || initial.answers || {});
+  const [answers, setAnswers] = useState(() => recovered.current?.answers || initial.answers || {});
   const [index, setIndex] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(recovered.current ? 'Đã khôi phục lựa chọn chưa đồng bộ trên thiết bị này.' : '');
   const [saveStatus, setSaveStatus] = useState(recovered.current ? 'Chờ đồng bộ' : 'Đã đồng bộ');
-  const current = useRef({ session: initial, answers: recovered.current || initial.answers || {}, dirty: Boolean(recovered.current), offset: Date.parse(initial.serverNow) - Date.now() });
+  const current = useRef({ session: initial, answers: recovered.current?.answers || initial.answers || {}, dirty: Boolean(recovered.current), offset: Date.parse(initial.serverNow) - Date.now() });
   const pending = useRef(null);
   const submitting = useRef(false);
   const mounted = useRef(true);
   const retryAt = useRef(0);
   const left = remainingSeconds(session.expiresAt, current.current.offset, now);
   const done = session.status !== 'in_progress';
+  // Điểm và thời gian của màn hình nộp bài lấy trực tiếp từ phiên vừa được backend chấm.
+  const officialResult = session;
   const unanswered = session.questions.map((question, position) => !answers[question.id] ? position + 1 : null).filter(Boolean);
   const question = session.questions[index];
 
@@ -133,9 +163,9 @@ export function ExamRunner({ initial, token, userId, onExit }) {
     current.current.answers = next; current.current.dirty = true; setAnswers(next); setSaveStatus('Chờ đồng bộ'); persist();
   }
   return <section className="content-section exam-runner">
-    <div className="exam-toolbar"><div><p className="eyebrow">{session.competitionName} · Lượt {session.attemptNumber}</p><h2>{session.examName}</h2><p>Mã đề: {session.examCode || session.examId}</p></div><div className={`exam-clock ${left <= 60 ? 'urgent' : ''}`} role="timer" aria-label="Thời gian còn lại">{String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')}<small>{done ? statusNames[session.status] : 'Thời gian còn lại'}</small></div></div>
+    <div className="exam-toolbar"><div><p className="eyebrow">{session.competitionName} · Lượt {session.attemptNumber}</p><h2>{session.roundName || 'Bài thi'}</h2><p>Mã đề: {session.examCode || session.examId}</p></div>{!done && <div className={`exam-clock ${left <= 60 ? 'urgent' : ''}`} role="timer" aria-label="Thời gian còn lại">{String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')}<small>Thời gian còn lại</small></div>}</div>
     <Notice text={message} error={saveStatus === 'Chưa đồng bộ'} />
-    {done ? <div className="exam-result"><h3>{session.status === 'expired' ? 'Đã tự động nộp bài khi hết giờ' : 'Bài thi đã được nộp'}</h3><strong>{Number(session.score || 0).toLocaleString('vi-VN')} / 100</strong><p>Kết quả đã được lưu trên hệ thống.</p><button onClick={onExit}>Về danh sách kỳ thi</button></div> : <>
+    {done ? <div className="exam-result"><h3>{session.status === 'expired' ? 'Đã tự động nộp bài khi hết giờ' : 'Bài thi đã được nộp'}</h3><strong>{officialScore(officialResult.score)}</strong><p>{session.roundName}</p><p>Bắt đầu: {formatDate(officialResult.startedAt)}</p><p>Nộp bài: {formatDate(officialResult.finishedAt)}</p><p>Thời gian làm bài: {officialDuration(officialResult.durationSeconds)}</p><button onClick={onExit}>Về danh sách kỳ thi</button></div> : <>
       <div className="save-bar"><span role="status">{saveStatus} · Đã chọn {session.questions.length - unanswered.length}/{session.questions.length} câu</span><button className="secondary" disabled={busy || left <= 0} onClick={save}>Đồng bộ ngay</button></div>
       {left === 0 && <p role="alert" className="notice warning-message">Đã hết giờ. Hệ thống đang xác nhận kết quả từ đáp án đã đồng bộ.</p>}
       <div className="question-layout"><nav className="question-nav" aria-label="Chọn câu hỏi">{session.questions.map((item, position) => <button key={item.id} className={`${position === index ? 'current' : ''} ${answers[item.id] ? 'answered' : ''}`} aria-label={`Câu ${position + 1}${answers[item.id] ? ', đã chọn' : ', chưa chọn'}`} aria-current={position === index ? 'step' : undefined} onClick={() => setIndex(position)}>{position + 1}</button>)}</nav>

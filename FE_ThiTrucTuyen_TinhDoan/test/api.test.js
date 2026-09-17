@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { api } from '../src/api.js';
+import { api } from '../src/shared/api.js';
 
 // Giả lập fetch và thời gian để kiểm tra lỗi API mà không gọi máy chủ thật.
 test('API preserves pending-registration metadata on SMTP failure', async t => {

@@ -1,3 +1,10 @@
+import { RoundProgression1789400000000 } from '../src/migrations/1789400000000-RoundProgression.js';
+import { HomeContent1789500000000 } from '../src/migrations/1789500000000-HomeContent.js';
+import { PinnedCompetition1789600000000 } from '../src/migrations/1789600000000-PinnedCompetition.js';
+import { BonusPrediction1789700000000 } from '../src/migrations/1789700000000-BonusPrediction.js';
+import { QuestionRoundScope1789800000000 } from '../src/migrations/1789800000000-QuestionRoundScope.js';
+import { CompetitionPassingScore1789900000000 } from '../src/migrations/1789900000000-CompetitionPassingScore.js';
+import { RemoveBonusPrediction1790000000000 } from '../src/migrations/1790000000000-RemoveBonusPrediction.js';
 // Kiểm thử cấu trúc và khả năng chạy lại migration mà không cần MySQL thật.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,6 +57,8 @@ class SchemaRunner {
   }
   async query(sql) {
     this.queries.push(sql);
+    // Dữ liệu mốc thời gian được kiểm tra trên MySQL thật; bộ này chỉ mô phỏng cấu trúc bảng.
+    if (sql.startsWith('UPDATE results r JOIN user_exam_sessions')) return [];
     let match;
     if ((match = sql.match(/^CREATE TABLE IF NOT EXISTS `([^`]+)` \((.*)\) ENGINE=/))) {
       const table = { name: match[1], columns: [], uniques: [], indices: [], foreignKeys: [], comment: sql.match(/COMMENT='([^']+)'/)?.[1] };
@@ -72,6 +81,9 @@ class SchemaRunner {
       const table = this.tables.get(match[1]);
       table.columns.push(columnFrom(match[2], column));
       if (constraint) this.addForeignKey(table, constraint);
+    } else if ((match = sql.match(/^ALTER TABLE `([^`]+)` DROP COLUMN `([^`]+)`$/))) {
+      const table = this.tables.get(match[1]);
+      table.columns = table.columns.filter(column => column.name !== match[2]);
     } else if ((match = sql.match(/^ALTER TABLE users MODIFY COLUMN email (.*)$/))) {
       const columns = this.tables.get('users').columns;
       columns[columns.findIndex((column) => column.name === 'email')] = columnFrom('email', match[1]);
@@ -85,6 +97,9 @@ class SchemaRunner {
       this.tables.get('otp_verifications').indices.push({ columnNames: ['user_id', 'purpose', 'expires_at'] });
     } else if ((match = sql.match(/^CREATE INDEX `([^`]+)` ON `([^`]+)` \((.*)\)$/))) {
       this.tables.get(match[2]).indices.push({ name: match[1], columnNames: namesIn(match[3]) });
+    } else if (sql.startsWith('SELECT DISTINCT competition_id FROM questions') || sql.startsWith('UPDATE questions SET round_id=')) {
+      // Migration dữ liệu chỉ có ý nghĩa trên MySQL thật; schema giả không chứa bản ghi cần chuyển đổi.
+      return [];
     } else if (sql === "UPDATE user_exam_sessions SET status = 'submitted' WHERE finished_at IS NOT NULL AND status = 'in_progress'") {
       return [];
     } else {
@@ -100,9 +115,16 @@ async function freshSchema() {
   return runner;
 }
 
-test('baseline and platform create all 21 entity tables and compatible foreign keys', async () => {
+test('all migrations create 21 entity tables and compatible foreign keys', async () => {
   const runner = await freshSchema();
   await new ExamPlatform1789000000000().up(runner);
+  await new RoundProgression1789400000000().up(runner);
+  await new HomeContent1789500000000().up(runner);
+  await new PinnedCompetition1789600000000().up(runner);
+  await new BonusPrediction1789700000000().up(runner);
+  await new QuestionRoundScope1789800000000().up(runner);
+  await new CompetitionPassingScore1789900000000().up(runner);
+  await new RemoveBonusPrediction1790000000000().up(runner);
   const directory = new URL('../src/entities/', import.meta.url);
   const entities = await Promise.all((await readdir(directory)).filter((name) => name.endsWith('.js')).map(async (name) => (await import(new URL(name, directory))).default));
   const source = new DataSource({ type: 'mysql', database: 'offline_schema_test', entities });

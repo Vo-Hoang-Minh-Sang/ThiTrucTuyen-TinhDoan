@@ -11,7 +11,7 @@ import { act, create } from 'react-test-renderer';
 // Biên dịch JSX thành tệp tạm để kiểm tra biểu mẫu trong Node mà không mở trình duyệt.
 const output = resolve('.test-build', `auth-panel-${randomUUID()}.mjs`);
 await mkdir(resolve('.test-build'), { recursive: true });
-await build({ entryPoints: ['src/AuthPanel.jsx'], outfile: output, bundle: true, platform: 'node', format: 'esm', jsx: 'automatic', packages: 'external', define: { 'import.meta.env': '{}' } });
+await build({ entryPoints: ['src/auth/AuthPanel.jsx'], outfile: output, bundle: true, platform: 'node', format: 'esm', jsx: 'automatic', packages: 'external', define: { 'import.meta.env': '{}' } });
 const { default: AuthPanel } = await import(pathToFileURL(output).href);
 after(() => unlink(output));
 

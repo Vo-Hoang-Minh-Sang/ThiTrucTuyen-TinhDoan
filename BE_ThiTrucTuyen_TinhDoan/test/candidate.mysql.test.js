@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
-import { createCandidateService, finalizeExpiredSessions } from '../src/exam-service.js';
+import { createCandidateService, finalizeExpiredSessions } from '../src/exam/exam-service.js';
 
 // Chỉ thử trên mysqld tạm có datadir được xác minh; không đọc hay sửa database thật trong .env.
 test('isolated MySQL: concurrent attempts, saves, submissions and expiration', {
@@ -25,9 +25,10 @@ test('isolated MySQL: concurrent attempts, saves, submissions and expiration', {
   const { DataSource } = await import('typeorm');
   const { InitialSchema1788912000000 } = await import('../src/migrations/1788912000000-InitialSchema.js');
   const { ExamPlatform1789000000000 } = await import('../src/migrations/1789000000000-ExamPlatform.js');
+  const { RoundProgression1789400000000 } = await import('../src/migrations/1789400000000-RoundProgression.js');
   const source = new DataSource({
     type: 'mysql', host: '127.0.0.1', port, username: 'root', password: '', database,
-    entities: [], migrations: [InitialSchema1788912000000, ExamPlatform1789000000000],
+    entities: [], migrations: [InitialSchema1788912000000, ExamPlatform1789000000000, RoundProgression1789400000000],
     migrationsTableName: 'schema_migrations', migrationsTransactionMode: 'none', synchronize: false, logging: false
   });
   try {
@@ -48,6 +49,8 @@ test('isolated MySQL: concurrent attempts, saves, submissions and expiration', {
     ];
     await pool.query(`INSERT INTO exams (name, competition_id, code, question_snapshot, is_published)
       VALUES ('Đề kiểm thử', ?, 'TEST001', ?, 1)`, [competition.insertId, JSON.stringify(questions)]);
+    await assert.rejects(() => service.start(user.insertId, competition.insertId), { code: 'REGISTRATION_REQUIRED' });
+    await service.register(user.insertId, competition.insertId);
     const starts = await Promise.all(Array.from({ length: 8 }, () => service.start(user.insertId, competition.insertId)));
     const sessionId = starts[0].id;
     assert.equal(new Set(starts.map(item => String(item.id))).size, 1);
@@ -89,10 +92,18 @@ test('isolated MySQL: concurrent attempts, saves, submissions and expiration', {
     assert.deepEqual(await service.results(otherUser.insertId), []);
 
     // Bài hết hạn phải được ghi kết quả ngay cả khi yêu cầu bắt đầu lượt mới bị từ chối.
+    await service.register(otherUser.insertId, competition.insertId);
     const otherSession = await service.start(otherUser.insertId, competition.insertId);
     await pool.query('UPDATE competitions SET max_attempts = 1 WHERE id = ?', [competition.insertId]);
     await pool.query('UPDATE user_exam_sessions SET expires_at = DATE_SUB(NOW(), INTERVAL 1 SECOND) WHERE id = ?', [otherSession.id]);
     await assert.rejects(() => service.start(otherUser.insertId, competition.insertId), { code: 'ATTEMPT_LIMIT' });
     assert.equal((await service.results(otherUser.insertId)).length, 1);
+    // Chạy lại migration không thêm cột trùng; phục hồi thời gian chỉ từ phiên cũ liên kết hợp lệ.
+    await pool.query('UPDATE results SET started_at=NULL,duration_seconds=NULL WHERE session_id=?',[sessionId]);
+    const runner=source.createQueryRunner();
+    try { await new RoundProgression1789400000000().up(runner); } finally { await runner.release(); }
+    const [[restored]]=await pool.query('SELECT started_at,duration_seconds FROM results WHERE session_id=?',[sessionId]);
+    assert.ok(restored.started_at);
+    assert.ok(Number(restored.duration_seconds)>=0);
   } finally { if (source.isInitialized) await source.destroy(); }
 });

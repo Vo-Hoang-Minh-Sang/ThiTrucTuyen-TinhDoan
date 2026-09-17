@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, TOKEN_KEY } from './api.js';
-import { clearExamCaches } from './examProgress.js';
+import { api, TOKEN_KEY } from '../shared/api.js';
+import { clearExamCaches } from '../candidate/examProgress.js';
 
 // Đọc thời hạn JWT để cập nhật giao diện; việc này không xác minh tính hợp lệ của token.
 // API /auth/me vẫn kiểm tra chữ ký, trạng thái tài khoản và phiên bản token khi khôi phục phiên.

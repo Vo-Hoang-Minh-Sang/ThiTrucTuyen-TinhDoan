@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { inspectOfficeArchive, QUESTION_HEADERS, readQuestionWorkbook } from '../src/files.js';
+import { inspectOfficeArchive, QUESTION_HEADERS, readQuestionWorkbook } from '../src/site/files.js';
 
 // Tạo ZIP chỉ chứa một mục để kiểm tra metadata khai sai; không cần thêm thư viện nén kiểm thử.
 function zipEntry(name, content, declaredSize = content.length) {

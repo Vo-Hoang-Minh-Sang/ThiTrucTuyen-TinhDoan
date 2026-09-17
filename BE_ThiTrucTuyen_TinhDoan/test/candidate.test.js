@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { rankResults, roundParticipation } from '../src/exam/rounds.js';
 import {
   computeDeadline, createCandidateService, finalizeExpiredSessions, gradeAnswers,
   readSnapshot, sessionToPayload, validateAnswers
-} from '../src/exam-service.js';
+} from '../src/exam/exam-service.js';
 
 const questions = [
   { id: 1, content: 'Câu một', optionA: 'A1', optionB: 'B1', optionC: 'C1', optionD: 'D1', correctAnswer: 'A', topic: 'Chủ đề', difficulty: 'easy' },
@@ -11,11 +12,33 @@ const questions = [
 ];
 const initialTime = new Date('2026-09-10T01:00:00Z');
 
+test('backend round states cover registration, schedule, qualification, quota and completion', () => {
+  const base = { round: {start_datetime:'2026-09-10T00:00:00Z',end_datetime:'2026-09-10T02:00:00Z'}, competition:{start_at:'2026-09-10T00:00:00Z',end_at:'2026-09-10T03:00:00Z',status:'published',max_attempts:2},now:initialTime,registered:true,eligible:true,used:0,completed:0,hasExam:true };
+  const state = change => roundParticipation({...base,...change});
+  assert.equal(state({}).status,'AVAILABLE');
+  for (const change of [{registered:false},{eligible:false},{hasExam:false},{now:new Date('2026-09-09')},{now:new Date('2026-09-10T04:00:00Z')}]) assert.equal(state(change).status,'LOCKED');
+  assert.equal(state({used:1,completed:1}).status,'AVAILABLE');
+  assert.equal(state({used:2,completed:2}).status,'COMPLETED');
+  assert.equal(state({used:2,completed:1,activeSessionId:99,hasExam:false}).status,'AVAILABLE');
+  assert.equal(state({completed:1,round:{...base.round,finalized_at:initialTime}}).status,'COMPLETED');
+  assert.equal(state({completed:1,competition:{...base.competition,status:'closed'}}).status,'COMPLETED');
+  assert.equal(state({used:2,completed:1,activeSessionId:99,competition:{...base.competition,status:'closed'}}).status,'AVAILABLE');
+  assert.equal(state({now:new Date('2026-09-09')}).scheduleStatus,'upcoming');
+});
+
+test('ranking uses best attempt per candidate, score before time and stable tie breakers', () => {
+  const result = (id,user_id,score,duration_seconds,finished_at='2026-09-10T01:30:00Z') => ({id,user_id,score,duration_seconds,finished_at});
+  const ranked = rankResults([result(1,1,90,1),result(2,1,100,50),result(3,2,100,10),result(4,3,100,10),result(5,4,100,10,'2026-09-10T01:29:00Z')]);
+  assert.deepEqual(ranked.map(row=>row.id),[5,3,4,2]);
+  // Khi cùng điểm và thời gian, thời điểm nộp rồi ID thí sinh giữ thứ tự ổn định.
+  assert.deepEqual(rankResults([result(11,11,100,20), result(12,12,100,20), result(13,13,80,20)]).map(row => row.id), [11, 12, 13]);
+});
+
 // Pool thử nghiệm thực hiện commit/rollback và tuần tự hóa giao dịch để kiểm tra luồng nghiệp vụ đồng thời.
 // Khóa hàng thực tế vẫn cần kiểm tra bổ sung bằng MySQL tích hợp.
-function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z' } = {}) {
+function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z', registered = true } = {}) {
   let state = {
-    now: initialTime, users: [{ id: 1, donviID: 9 }, { id: 2, donviID: 10 }], sessions: [], registrations: [], results: [],
+    now: initialTime, users: [{ id: 1, donviID: 9 }, { id: 2, donviID: 10 }], sessions: [], registrations: registered ? [{ user_id: 1, competition_id: 7, unit_id: 9, registered_at: initialTime }] : [], results: [],
     competition: { id: 7, name: 'Kỳ thi', description: '', duration_minutes: 30, max_attempts: maxAttempts,
       start_at: new Date('2026-09-10T00:00:00Z'), end_at: new Date(endAt), status: 'published' },
     exams: [{ id: 5, name: 'Đề một', code: 'DE001', question_snapshot: structuredClone(questions) }]
@@ -25,6 +48,7 @@ function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z' } = {}) {
     sql = sql.replace(/\s+/g, ' ').trim();
     if (sql === 'SELECT CURRENT_TIMESTAMP AS server_now') return [[{ server_now: state.now }]];
     if (sql.startsWith('SELECT id, donviID FROM users')) return [state.users.filter(user => matches(user.id, args[0]))];
+    if (sql.startsWith('SELECT * FROM rounds')) return [[]];
     if (sql.startsWith('SELECT * FROM competitions')) return [matches(state.competition.id, args[0]) ? [state.competition] : []];
     if (sql.includes('FROM user_exam_sessions WHERE user_id = ? AND competition_id = ? AND status')) {
       return [structuredClone(state.sessions.filter(session => matches(session.user_id, args[0]) && matches(session.competition_id, args[1]) && session.status === 'in_progress').reverse())];
@@ -113,6 +137,19 @@ test('invalid or duplicate snapshot questions are rejected and payload never exp
   assert.deepEqual(Object.keys(payload.questions[0]), ['id', 'content', 'optionA', 'optionB', 'optionC', 'optionD']);
   assert.equal(JSON.stringify(payload).includes('correctAnswer'), false);
   assert.equal(payload.score, null);
+});
+
+test('start requires separate registration for the same candidate and competition without consuming attempts', async () => {
+  const f = fixture({ registered: false });
+  await assert.rejects(() => f.service.start(1, 7), { status: 403, code: 'REGISTRATION_REQUIRED' });
+  assert.equal(f.state.sessions.length, 0);
+  assert.equal(f.state.registrations.length, 0);
+  await f.service.register(2, 7);
+  await assert.rejects(() => f.service.start(1, 7), { code: 'REGISTRATION_REQUIRED' });
+  await f.service.register(1, 7);
+  await assert.rejects(() => f.service.start(1, 8), { code: 'REGISTRATION_REQUIRED' });
+  const session = await f.service.start(1, 7);
+  assert.equal(session.attemptNumber, 1);
 });
 
 test('parallel starts restore one session and count one registration and one attempt', async () => {

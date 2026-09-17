@@ -18,6 +18,13 @@ import PasswordResetTemp from './entities/PasswordResetTemp.js';
 import OtpVerification from './entities/OtpVerification.js';
 import { InitialSchema1788912000000 } from './migrations/1788912000000-InitialSchema.js';
 import { ExamPlatform1789000000000 } from './migrations/1789000000000-ExamPlatform.js';
+import { RoundProgression1789400000000 } from './migrations/1789400000000-RoundProgression.js';
+import { HomeContent1789500000000 } from './migrations/1789500000000-HomeContent.js';
+import { PinnedCompetition1789600000000 } from './migrations/1789600000000-PinnedCompetition.js';
+import { BonusPrediction1789700000000 } from './migrations/1789700000000-BonusPrediction.js';
+import { QuestionRoundScope1789800000000 } from './migrations/1789800000000-QuestionRoundScope.js';
+import { CompetitionPassingScore1789900000000 } from './migrations/1789900000000-CompetitionPassingScore.js';
+import { RemoveBonusPrediction1790000000000 } from './migrations/1790000000000-RemoveBonusPrediction.js';
 import AuthSession from './entities/AuthSession.js';
 import PasswordResetRequest from './entities/PasswordResetRequest.js';
 import TeacherCompetition from './entities/TeacherCompetition.js';
@@ -36,7 +43,7 @@ export const dataSource = new DataSource({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'tinhdoan_thitructuyen',
   entities: [DoanCoSo, DonVi, User, Question, Exam, ExamQuestion, Competition, Round, UserExamSession, Result, Statistics, Rank, PasswordResetTemp, OtpVerification, AuthSession, PasswordResetRequest, TeacherCompetition, CompetitionRegistration, SiteSetting, SiteAsset, AuditLog],
-  migrations: [InitialSchema1788912000000, ExamPlatform1789000000000],
+  migrations: [InitialSchema1788912000000, ExamPlatform1789000000000, RoundProgression1789400000000, HomeContent1789500000000, PinnedCompetition1789600000000, BonusPrediction1789700000000, QuestionRoundScope1789800000000, CompetitionPassingScore1789900000000, RemoveBonusPrediction1790000000000],
   migrationsTableName: 'schema_migrations',
   // MySQL tự xác nhận các lệnh DDL nên không bọc toàn bộ migration trong giao dịch.
   migrationsTransactionMode: 'none',

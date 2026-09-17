@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { act, create } from 'react-test-renderer';
-import useSession, { tokenExpiresAt } from '../src/useSession.js';
-import { TOKEN_KEY } from '../src/api.js';
+import useSession, { tokenExpiresAt } from '../src/auth/useSession.js';
+import { TOKEN_KEY } from '../src/shared/api.js';
 
 // Token giả chỉ phục vụ kiểm tra giao diện; không phải JWT có chữ ký hợp lệ để gọi backend.
 const tokenFor = (name, expires = Math.floor(Date.now() / 1000) + 3600) => `header.${Buffer.from(JSON.stringify({ sub: name, exp: expires })).toString('base64url')}.signature`;
