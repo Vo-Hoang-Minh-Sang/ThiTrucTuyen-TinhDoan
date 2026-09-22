@@ -7,6 +7,10 @@ import { createAccess, publicUser, USER_FIELDS } from './access.js';
 
 export { validateAuthConfiguration } from './security.js';
 
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+const OTP_SEND_DAILY_LIMIT = 5;
+const OTP_SEND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const RESET_MESSAGE = 'Nếu tài khoản tồn tại, yêu cầu hỗ trợ đặt lại mật khẩu đã được ghi nhận. Vui lòng liên hệ quản trị viên để xác minh và nhận mật khẩu tạm thời.';
 const normalizeEmail = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const normalizePhone = value => typeof value === 'string' ? value.trim().replace(/[\s.-]/g, '') : '';
@@ -86,13 +90,17 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
       // Khóa tài khoản trước rồi đến OTP để các yêu cầu gửi lại và xác nhận được xử lý lần lượt.
       const [[user]] = await tx.query(`SELECT ${USER_FIELDS} FROM users WHERE id = ? FOR UPDATE`, [userId]);
       if (!user?.email) return { unavailable: true };
+      // Dem trong database de gioi han nam van hieu luc sau khi backend khoi dong lai.
+      const [[daily]] = await tx.query(`SELECT COUNT(*) AS sent, COALESCE(TIMESTAMPDIFF(SECOND, NOW(), DATE_ADD(MIN(created_at), INTERVAL 1 DAY)), 0) AS retry_after
+        FROM otp_verifications WHERE user_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY)`, [user.id]);
+      if (Number(daily.sent) >= OTP_SEND_DAILY_LIMIT) return { dailyLimit: Math.max(1, Number(daily.retry_after) || OTP_SEND_WINDOW_MS / 1000) };
       const previous = await latestOtp(tx, user.id, purpose);
       // Mã đăng ký mới nhất đã dùng cho biết đăng ký đã hoàn tất, kể cả khi tài khoản
       // bị vô hiệu hóa sau đó; gửi lại OTP không được kích hoạt lại những tài khoản này.
       if (purpose === 'register' && (Number(user.is_active) === 1 || !previous || previous.verified_at)) return { unavailable: true };
       // MySQL có thể trả kết quả so sánh dưới dạng chuỗi '0'/'1', nên cần đổi sang số.
-      if (previous && !previous.verified_at && Number(previous.unexpired) === 1 && Number(previous.age_seconds) < 60) {
-        return { cooldown: Math.max(1, 60 - Number(previous.age_seconds)) };
+      if (previous && !previous.verified_at && Number(previous.age_seconds) < OTP_RESEND_COOLDOWN_SECONDS) {
+        return { cooldown: Math.max(1, OTP_RESEND_COOLDOWN_SECONDS - Number(previous.age_seconds)) };
       }
       await tx.query('UPDATE otp_verifications SET verified_at = NOW() WHERE user_id = ? AND purpose = ? AND verified_at IS NULL', [user.id, purpose]);
       const [result] = await tx.query('INSERT INTO otp_verifications (user_id, purpose, otp_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))', [user.id, purpose, otpHash, config.otpExpiresMinutes]);
@@ -121,6 +129,10 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
   }
 
   function otpResponse(response, issued, success, extra = {}, status = 200) {
+    if (issued.dailyLimit) {
+      response.set('Retry-After', String(issued.dailyLimit));
+      return failure(response, 429, 'OTP_DAILY_LIMIT', 'Moi email chi duoc nhan toi da 5 ma OTP trong 24 gio.', { ...extra, retryAfter: issued.dailyLimit });
+    }
     if (issued.cooldown) {
       response.set('Retry-After', String(issued.cooldown));
       return failure(response, 429, 'RATE_LIMITED', 'Vui lòng chờ trước khi gửi lại OTP.', { ...extra, retryAfter: issued.cooldown });
@@ -132,17 +144,19 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
 
   router.post('/register', route(async (request, response) => {
     const { hoten, dienthoai, email, password, donviID } = request.body;
+    const chucVu = typeof request.body.chucVu === 'string' && request.body.chucVu.trim() ? request.body.chucVu.trim() : 'Đoàn viên';
     const phone = normalizePhone(dienthoai);
     const normalizedEmail = normalizeEmail(email);
     const unit = typeof donviID === 'number' || typeof donviID === 'string' ? Number(donviID) : NaN;
     const errors = {};
     if (typeof hoten !== 'string' || !hoten.trim() || hoten.trim().length > 255) errors.hoten = 'Họ tên từ 1 đến 255 ký tự.';
+    if (chucVu.length > 100) errors.chucVu = 'Chức vụ không quá 100 ký tự.';
     if (!validPhone(phone)) errors.dienthoai = 'Số điện thoại phải gồm 9 đến 15 chữ số.';
     if (!validEmail(normalizedEmail)) errors.email = 'Email không hợp lệ.';
     if (!validPassword(password)) errors.password = 'Mật khẩu cần ít nhất 8 ký tự và không quá 72 byte UTF-8.';
     if (!Number.isSafeInteger(unit) || unit <= 0) errors.donviID = 'Vui lòng chọn đơn vị hợp lệ.';
     if (Object.keys(errors).length) return failure(response, 400, 'VALIDATION_ERROR', Object.values(errors)[0], { errors });
-    if (throttle(request, response, 'issue', normalizedEmail, 3, 15 * 60 * 1000)) return;
+    if (throttle(request, response, 'issue', normalizedEmail, OTP_SEND_DAILY_LIMIT, OTP_SEND_WINDOW_MS)) return;
     const [units] = await pool.query('SELECT id FROM donvi WHERE id = ? LIMIT 1', [unit]);
     if (!units.length) return failure(response, 400, 'VALIDATION_ERROR', 'Đơn vị đã chọn không tồn tại.', { errors: { donviID: 'Đơn vị đã chọn không tồn tại.' } });
     const [existing] = await pool.query('SELECT id FROM users WHERE dienthoai = ? OR email = ? LIMIT 1', [phone, normalizedEmail]);
@@ -151,7 +165,11 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
     if (!config.otpEnabled) {
       try {
         // Đăng ký công khai luôn là thí sinh; không nhận vai trò hoặc quyền từ trình duyệt.
-        const [created] = await pool.query("INSERT INTO users (hoten, dienthoai, email, donviID, password, is_active, role) VALUES (?, ?, ?, ?, ?, 1, 'candidate')", [hoten.trim(), phone, normalizedEmail, unit, passwordHash]);
+        const sql = chucVu === 'Đoàn viên'
+          ? "INSERT INTO users (hoten, dienthoai, email, donviID, password, is_active, role) VALUES (?, ?, ?, ?, ?, 1, 'candidate')"
+          : "INSERT INTO users (hoten, dienthoai, email, chuc_vu, donviID, password, is_active, role) VALUES (?, ?, ?, ?, ?, ?, 1, 'candidate')";
+        const values = chucVu === 'Đoàn viên' ? [hoten.trim(), phone, normalizedEmail, unit, passwordHash] : [hoten.trim(), phone, normalizedEmail, chucVu, unit, passwordHash];
+        const [created] = await pool.query(sql, values);
         return response.status(201).json({ success: true, userId: created.insertId, registrationPending: false, message: 'Đăng ký thành công. Bạn có thể đăng nhập ngay.' });
       } catch (error) {
         if (error.code === 'ER_DUP_ENTRY' || error.driverError?.code === 'ER_DUP_ENTRY') return failure(response, 409, 'ACCOUNT_EXISTS', 'Email hoặc số điện thoại đã được đăng ký.');
@@ -164,7 +182,11 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
     try {
       // Tạo tài khoản và OTP đầu tiên cùng lúc; nếu lưu OTP lỗi thì không để lại tài khoản bị kẹt.
       created = await pool.transaction(async tx => {
-        const [result] = await tx.query('INSERT INTO users (hoten, dienthoai, email, donviID, password, is_active) VALUES (?, ?, ?, ?, ?, 0)', [hoten.trim(), phone, normalizedEmail, unit, passwordHash]);
+        const sql = chucVu === 'Đoàn viên'
+          ? 'INSERT INTO users (hoten, dienthoai, email, donviID, password, is_active) VALUES (?, ?, ?, ?, ?, 0)'
+          : 'INSERT INTO users (hoten, dienthoai, email, chuc_vu, donviID, password, is_active) VALUES (?, ?, ?, ?, ?, ?, 0)';
+        const values = chucVu === 'Đoàn viên' ? [hoten.trim(), phone, normalizedEmail, unit, passwordHash] : [hoten.trim(), phone, normalizedEmail, chucVu, unit, passwordHash];
+        const [result] = await tx.query(sql, values);
         const [otpResult] = await tx.query('INSERT INTO otp_verifications (user_id, purpose, otp_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))', [result.insertId, 'register', otpHash, config.otpExpiresMinutes]);
         return { userId: result.insertId, id: otpResult.insertId, email: normalizedEmail };
       });
@@ -179,7 +201,7 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
   router.post('/resend-registration', route(async (request, response) => {
     const identifier = parseIdentifier(request.body.identifier || request.body.dienthoai);
     if (!identifier) return failure(response, 400, 'VALIDATION_ERROR', 'Vui lòng nhập email hoặc số điện thoại hợp lệ.');
-    if (throttle(request, response, 'issue', identifier.key, 3, 15 * 60 * 1000)) return;
+    if (throttle(request, response, 'issue', identifier.key, OTP_SEND_DAILY_LIMIT, OTP_SEND_WINDOW_MS)) return;
     const user = await findUser(pool, identifier);
     if (!user) return failure(response, 400, 'REGISTRATION_UNAVAILABLE', 'Tài khoản không có đăng ký đang chờ xác nhận.');
     return otpResponse(response, await issueOtp(user.id, 'register'), 'OTP xác nhận mới đã được gửi về email.', { registrationPending: true });
@@ -222,7 +244,7 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
   router.post('/request-password-reset', route(async (request, response) => {
     const identifier = parseIdentifier(request.body.identifier);
     if (!identifier) return failure(response, 400, 'VALIDATION_ERROR', 'Vui lòng nhập email hoặc số điện thoại hợp lệ.');
-    if (throttle(request, response, 'issue', identifier.key, 3, 15 * 60 * 1000)) return;
+    if (throttle(request, response, 'issue', identifier.key, OTP_SEND_DAILY_LIMIT, OTP_SEND_WINDOW_MS)) return;
     if (!config.otpEnabled) {
       await pool.transaction(async tx => {
         const user = await findUser(tx, identifier, true);
@@ -231,15 +253,15 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
         if (!pending) await tx.query('INSERT INTO password_reset_requests (user_id) VALUES (?)', [user.id]);
       });
       // Phản hồi giống nhau cho tài khoản có và không tồn tại; không cấp token đặt lại ở đây.
-      return response.json({ success: true, message: RESET_MESSAGE });
+      return response.json({ success: true, message: RESET_MESSAGE, otpRequired: false });
     }
     const user = await findUser(pool, identifier);
-    if (!user?.email) return response.json({ success: true, message: RESET_MESSAGE });
+    if (!user?.email) return response.json({ success: true, message: RESET_MESSAGE, otpRequired: true });
     const issued = await issueOtp(user.id, 'reset_password');
     // Không tiết lộ email đã đăng ký khi người dùng yêu cầu đặt lại mật khẩu bằng điện thoại.
     delete issued.email;
     if (issued.unavailable) return response.json({ success: true, message: RESET_MESSAGE });
-    return otpResponse(response, issued, RESET_MESSAGE);
+    return otpResponse(response, issued, 'M\u00e3 OTP \u0111\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u \u0111\u00e3 \u0111\u01b0\u1ee3c g\u1eedi v\u1ec1 email.', { otpRequired: true });
   }));
 
   router.post('/reset-password', route(async (request, response) => {

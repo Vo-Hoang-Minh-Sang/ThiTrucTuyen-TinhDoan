@@ -10,6 +10,18 @@ import { inspectOfficeArchive, upload } from './files.js';
 export const uploadsDirectory = path.resolve(process.env.UPLOAD_DIR || fileURLToPath(new URL('../uploads/', import.meta.url)));
 const jsonList = value => { try { const list = typeof value === 'string' ? JSON.parse(value) : value; return Array.isArray(list) ? list.filter(item => item?.url && item?.title).slice(0, 20) : []; } catch { return []; } };
 const settingsPayload = row => ({ title: row?.title || 'Thi trực tuyến Tỉnh Đoàn', description: row?.description || '', bannerUrl: row?.banner_url || '', newsUrl: row?.news_url || '', newsTitle: row?.news_title || '', pinnedCompetitionId: row?.pinned_competition_id || null, banners: jsonList(row?.banners_json), news: jsonList(row?.news_json) });
+// Multer/Busboy c? th? ??c filename trong multipart theo Latin-1 d? tr?nh duy?t g?i UTF-8.
+// Chu?n h?a tr??c khi ??a t?n t?p v?o th?ng b?o, ti?u ?? tin t?c v? c? s? d? li?u.
+export function uploadedFileName(value) {
+  const raw = String(value || '');
+  if (!raw || [...raw].some(character => character.codePointAt(0) > 255)) return raw;
+  try {
+    const bytes = Buffer.from(raw, 'latin1');
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return Buffer.from(decoded, 'utf8').equals(bytes) ? decoded : raw;
+  } catch { return raw; }
+}
+
 const assetId = (url, kind) => {
   if (typeof url !== 'string' || !/^\/api\/assets\/[0-9a-f-]{36}$/.test(url)) throw fail(400, 'Hãy sử dụng tệp đã tải lên hệ thống.');
   return { id: url.split('/').at(-1), kind };
@@ -46,21 +58,26 @@ export function createSiteRouter({ pool }) {
     const [[asset]] = await pool.query('SELECT * FROM site_assets WHERE id=?', [req.params.id]);
     if (!asset || path.basename(asset.path) !== asset.path) throw fail(404, 'Không tìm thấy tệp.');
     res.type(asset.mime_type);
-    if (asset.kind === 'news') res.attachment(`tin-tuc.${asset.path.split('.').at(-1)}`);
-    res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+    // Tin t?c m? tr?c ti?p ?? ??c tr?n tr?nh duy?t; ch? t?i t?p khi ng??i d?ng b?m n?t t?i xu?ng.
+    if (asset.kind === 'news' && req.query.download === '1') res.attachment(`tin-tuc.${asset.path.split('.').at(-1)}`);
+    else res.set('Content-Disposition', 'inline');
+    // Kh?ng sandbox t?p c?ng b?: m?t s? tr?nh duy?t kh?ng th? d?ng tr?nh xem PDF t?ch h?p khi ph?n h?i b? sandbox.
+    res.set('Content-Security-Policy', "default-src 'none'");
     await new Promise((resolve, reject) => res.sendFile(asset.path, { root: uploadsDirectory }, error => error ? reject(error.status === 404 ? fail(404, 'Tệp không còn trên máy chủ.') : error) : resolve()));
   }));
   router.post('/manage/assets', createAccess({ pool }), requireRoles('admin'), upload.single('file'), route(async (req, res) => {
-    const kind = req.body.kind, type = await detectAsset(req.file, kind), id = randomUUID(), filename = `${id}.${type.extension}`;
+    const originalName = uploadedFileName(req.file?.originalname);
+    const file = { ...req.file, originalname: originalName };
+    const kind = req.body.kind, type = await detectAsset(file, kind), id = randomUUID(), filename = `${id}.${type.extension}`;
     await mkdir(uploadsDirectory, { recursive: true });
     await writeFile(path.join(uploadsDirectory, filename), req.file.buffer, { flag: 'wx' });
     try {
       await pool.transaction(async tx => {
-        await tx.query('INSERT INTO site_assets (id,original_name,kind,mime_type,path,created_by) VALUES (?,?,?,?,?,?)', [id, req.file.originalname.slice(0, 255), kind, type.mime, filename, req.user.id]);
+        await tx.query('INSERT INTO site_assets (id,original_name,kind,mime_type,path,created_by) VALUES (?,?,?,?,?,?)', [id, originalName.slice(0, 255), kind, type.mime, filename, req.user.id]);
         await audit(tx, req.user.id, 'asset.upload', 'asset', id);
       });
     } catch (error) { await unlink(path.join(uploadsDirectory, filename)).catch(() => {}); throw error; }
-    res.status(201).json({ success: true, item: { url: `/api/assets/${id}`, name: req.file.originalname, kind } });
+    res.status(201).json({ success: true, item: { url: `/api/assets/${id}`, name: originalName, kind } });
   }));
   router.put('/manage/site/pin-competition', createAccess({ pool }), requireRoles('admin'), route(async (req, res) => {
     const competitionId = req.body?.competitionId ? Number(req.body.competitionId) : null;

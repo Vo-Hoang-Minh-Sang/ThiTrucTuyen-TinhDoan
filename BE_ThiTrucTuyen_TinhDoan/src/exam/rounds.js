@@ -7,6 +7,7 @@ export function roundParticipation({ round, competition, now, registered, eligib
   const time = new Date(now).getTime();
   const scheduleStatus = !Number.isFinite(start) || !Number.isFinite(end) || end <= start ? 'unscheduled' : time < start ? 'upcoming' : time >= end ? 'ended' : 'active';
   const result = (status, message = '') => ({ status, scheduleStatus, eligibilityMessage: message });
+  if (competition.status === 'paused') return result('LOCKED', 'Cuộc thi đang bị tạm dừng.');
   if (round.finalized_at || scheduleStatus === 'ended') return result(completed > 0 ? 'COMPLETED' : 'LOCKED', round.finalized_at ? 'Vòng thi đã chốt kết quả.' : 'Vòng thi đã kết thúc.');
   if (!registered) return result('LOCKED', 'Bạn cần đăng ký cuộc thi trước khi làm bài.');
   if (!eligible) return result('LOCKED', eligibilityMessage || 'Bạn chưa đủ điều kiện vào vòng này.');
@@ -44,11 +45,13 @@ export async function finalizeRound(pool, competitionId, roundId) {
     // Khóa cuộc thi cùng quy ước với cấp bài; không có lượt mới chen vào lúc chốt thứ hạng.
     // Điểm chuẩn thuộc kỳ thi, còn Top N thuộc từng vòng. Khóa cả hai dữ liệu để
     // kết quả chốt không thay đổi khi quản trị viên đang chỉnh cấu hình.
-    const [[competition]] = await tx.query('SELECT id,passing_score FROM competitions WHERE id=? FOR UPDATE', [competitionId]);
+    const [[competition]] = await tx.query('SELECT id,name,status FROM competitions WHERE id=? FOR UPDATE', [competitionId]);
     if (!competition) throw fail(404, 'Không tìm thấy kỳ thi.');
+    // Bản nháp chỉ là dữ liệu cấu hình, dù đã qua lịch cũng không được chốt xếp hạng hay danh sách đi tiếp.
+    if (['draft', 'paused'].includes(competition.status)) throw fail(409, 'Kỳ thi đang ở trạng thái chưa thể chốt kết quả.');
     const [[round]] = await tx.query('SELECT *,CURRENT_TIMESTAMP AS server_now FROM rounds WHERE id=? AND competition_id=? AND enabled=1 FOR UPDATE', [roundId, competitionId]);
     if (!round) throw fail(404, 'Không tìm thấy vòng thi.');
-    if (round.finalized_at) return;
+    if (round.finalized_at) return { finalized: false, competitionFinished: false };
     if (new Date(round.server_now) < new Date(round.end_datetime)) throw fail(409, 'Chỉ chốt xếp hạng sau khi vòng thi kết thúc.');
     const [[pending]] = await tx.query("SELECT id FROM user_exam_sessions WHERE round_id=? AND status='in_progress' LIMIT 1", [roundId]);
     if (pending) throw fail(409, 'Còn bài chưa chấm. Vui lòng chờ hệ thống chốt bài hết giờ rồi thử lại.');
@@ -58,36 +61,47 @@ export async function finalizeRound(pool, competitionId, roundId) {
     const ranked = rankResults(rows);
     // Thí sinh đi tiếp phải đồng thời đạt điểm chuẩn và thuộc Top N. Top N bằng 0
     // nghĩa là không giới hạn số lượng, khi đó chỉ xét điều kiện điểm chuẩn.
-    const passingScore = Number(competition.passing_score || 0);
+    // ?i?u ki?n ?i ti?p ch? d?a tr?n th? h?ng Top N c?a t?ng v?ng. Top N b?ng 0 ngh?a l? kh?ng gi?i h?n.
     const topLimit = Number(round.advance_count);
     for (let i = 0; i < ranked.length; i += 1) {
-      const passedScore = Number(ranked[i].score) >= passingScore;
-      const withinTop = topLimit === 0 || i < topLimit;
-      await tx.query('UPDATE results SET round_rank=?,advanced=? WHERE id=?', [i + 1, Number(passedScore && withinTop), ranked[i].id]);
+      await tx.query('UPDATE results SET round_rank=?,advanced=? WHERE id=?', [i + 1, Number(topLimit === 0 || i < topLimit), ranked[i].id]);
     }
     await tx.query('UPDATE rounds SET finalized_at=CURRENT_TIMESTAMP WHERE id=?', [roundId]);
+    // Chỉ sao lưu sau vòng cuối cùng; các vòng sau chưa chốt vẫn cho biết kỳ thi chưa kết thúc.
+    const [[remaining]] = await tx.query('SELECT id FROM rounds WHERE competition_id=? AND enabled=1 AND id<>? AND finalized_at IS NULL LIMIT 1', [competitionId, roundId]);
+    return { finalized: true, competitionFinished: !remaining, competitionName: competition.name };
   });
 }
 
 // Worker quét các vòng đã hết giờ sau khi các phiên làm bài hết hạn đã được chấm.
 // Hàm có thể chạy trên nhiều tiến trình vì finalizeRound khóa vòng và bỏ qua vòng đã chốt.
-export async function finalizeEndedRounds(pool, { limit = 100 } = {}) {
+export async function finalizeEndedRounds(pool, { limit = 100, onCompetitionFinished } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError('INVALID_ROUND_FINALIZATION_BATCH_SIZE');
-  const [rounds] = await pool.query(`SELECT id, competition_id AS competitionId FROM rounds
-    WHERE enabled=1 AND finalized_at IS NULL AND end_datetime<=CURRENT_TIMESTAMP
-    ORDER BY end_datetime,id LIMIT ${limit}`);
+  const [rounds] = await pool.query(`SELECT r.id, r.competition_id AS competitionId FROM rounds r
+    JOIN competitions c ON c.id=r.competition_id
+    WHERE r.enabled=1 AND r.finalized_at IS NULL AND r.end_datetime<=CURRENT_TIMESTAMP AND c.status NOT IN ('draft','paused')
+    ORDER BY r.end_datetime,r.id LIMIT ${limit}`);
   let finalized = 0;
   let waiting = 0;
   let failed = 0;
+  const finishedCompetitions = [];
   for (const round of rounds) {
     try {
-      await finalizeRound(pool, round.competitionId, round.id);
-      finalized += 1;
+      const result = await finalizeRound(pool, round.competitionId, round.id);
+      if (result?.finalized) finalized += 1;
+      if (result?.competitionFinished) finishedCompetitions.push(result);
     } catch (error) {
       // Phiên vừa hết giờ có thể đang được worker chấm; lần quét kế tiếp sẽ chốt vòng.
       if (error.status === 409) { waiting += 1; continue; }
       failed += 1;
       console.error('Không thể tự chốt vòng thi:', round.id, error.code || error.name);
+    }
+  }
+  // Callback chạy sau khi giao dịch chốt vòng đã hoàn tất, nên backup không giữ khóa dữ liệu thi.
+  if (onCompetitionFinished) {
+    for (const competition of finishedCompetitions) {
+      try { await onCompetitionFinished(competition); }
+      catch (error) { failed += 1; console.error('Không thể sao lưu sau khi kết thúc kỳ thi:', error.code || error.name); }
     }
   }
   return { finalized, waiting, failed };

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
+import { uploadedFileName } from '../src/site/assets.js';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
 import { inspectOfficeArchive, QUESTION_HEADERS, readQuestionWorkbook } from '../src/site/files.js';
@@ -32,7 +33,7 @@ test('Office preflight checks required type, macro entries and real decompressio
 async function workbookFile(rows, formula = false) {
   const workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('Cau hoi');
   sheet.addRow(QUESTION_HEADERS);
-  for (let index = 0; index < rows; index++) sheet.addRow([formula ? { formula: '1+1', result: 2 } : 'Một tuần có bao nhiêu ngày?', '5', '6', '7', '8', 'C', 'Chung', 'easy']);
+  for (let index = 0; index < rows; index++) sheet.addRow([index + 1, formula ? { formula: '1+1', result: 2 } : 'Một tuần có bao nhiêu ngày?', '5', '6', '7', '8', 'C', 'easy']);
   const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
   return { originalname: 'cau-hoi.xlsx', size: buffer.length, buffer };
 }
@@ -43,4 +44,11 @@ test('question workbook accepts its template and caps import at 500 questions', 
   assert.equal(valid[0].correctAnswer, 'C');
   await assert.rejects(readQuestionWorkbook(await workbookFile(501)), { status: 400 });
   await assert.rejects(readQuestionWorkbook(await workbookFile(1, true)), { status: 400 });
+});
+
+
+test('t?n t?p UTF-8 g?i qua multipart ???c hi?n th? ??ng ti?ng Vi?t', () => {
+  const encodedByLatin1 = Buffer.from('Th?ng b?o k? thi.pdf', 'utf8').toString('latin1');
+  assert.equal(uploadedFileName(encodedByLatin1), 'Th?ng b?o k? thi.pdf');
+  assert.equal(uploadedFileName('thong-bao.pdf'), 'thong-bao.pdf');
 });

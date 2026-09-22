@@ -3,7 +3,7 @@ import { validateAuthConfiguration } from './security.js';
 
 export const ROLES = Object.freeze(['candidate', 'teacher', 'admin']);
 export const PERMISSIONS = Object.freeze(['questions', 'exams', 'candidates', 'reports']);
-export const USER_FIELDS = 'id, hoten, dienthoai, email, password, donviID, is_active, token_version, role, permissions, must_change_password';
+export const USER_FIELDS = 'id, hoten, dienthoai, email, chuc_vu, password, donviID, is_active, token_version, role, permissions, must_change_password';
 
 // Chỉ chấp nhận các quyền đã được hệ thống định nghĩa, kể cả khi dữ liệu cũ bị sai.
 export function parsePermissions(value) {
@@ -16,7 +16,7 @@ export function parsePermissions(value) {
 
 export function publicUser(user) {
   return {
-    id: user.id, hoten: user.hoten, dienthoai: user.dienthoai, email: user.email, donviID: user.donviID,
+    id: user.id, hoten: user.hoten, dienthoai: user.dienthoai, email: user.email, chucVu: user.chuc_vu || 'Đoàn viên', donviID: user.donviID,
     is_active: Number(user.is_active) === 1, role: user.role,
     permissions: user.role === 'admin' ? [...PERMISSIONS] : parsePermissions(user.permissions),
     must_change_password: Number(user.must_change_password) === 1

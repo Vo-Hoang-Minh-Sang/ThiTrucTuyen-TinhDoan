@@ -29,10 +29,13 @@ export default new EntitySchema({
       "length": 64,
       "nullable": true
     },
+    "details": {
+      "type": "json",
+      "nullable": true
+    },
     "created_at": {
       "type": "datetime",
       "createDate": true
     }
   }
 });
-

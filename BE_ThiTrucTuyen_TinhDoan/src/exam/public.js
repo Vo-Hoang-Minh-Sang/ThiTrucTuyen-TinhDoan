@@ -14,12 +14,12 @@ export function examToPayload(exam, now = new Date()) {
   const start = asDate(exam.start_datetime || exam.start_date);
   const end = asDate(exam.end_datetime || exam.end_date, !exam.end_datetime);
   const scheduled = start && end && end >= start;
-  const status = exam.competition_status === 'closed' ? 'Đã đóng' : !scheduled ? 'Chưa có lịch thi' : now < start ? 'Sắp diễn ra' : now >= end ? 'Đã kết thúc' : 'Đang diễn ra';
+  const status = exam.competition_status === 'paused' ? 'Tạm đóng' : exam.competition_status === 'closed' ? 'Đã đóng' : !scheduled ? 'Chưa có lịch thi' : now < start ? 'Sắp diễn ra' : now >= end ? 'Đã kết thúc' : 'Đang diễn ra';
   return {
     id: exam.id, title: exam.title, description: exam.description,
     status, date: scheduled ? `${start.toLocaleDateString('vi-VN')} - ${end.toLocaleDateString('vi-VN')}` : null,
     startAt: scheduled ? start.toISOString() : null, endAt: scheduled ? end.toISOString() : null,
-    questions: Number(exam.questions), duration: `${exam.takingtime} phút`, passingScore: Number(exam.passingscore)
+    questions: Number(exam.questions), duration: `${exam.takingtime} phút`
   };
 }
 
@@ -46,7 +46,7 @@ export function createPublicRouter({ pool }) {
       const [rows] = await pool.query(`SELECT c.id, c.name, c.description, c.duration_minutes, c.max_attempts,
         c.start_at, c.end_at, c.start_date, c.end_date, c.status,
         (SELECT COUNT(*) FROM exams e WHERE e.competition_id = c.id AND e.is_published = 1) AS exam_count
-        FROM competitions c WHERE c.status IN ('published','closed') ORDER BY c.start_at, c.start_date, c.id`);
+        FROM competitions c WHERE c.status IN ('published','paused','closed') ORDER BY c.start_at, c.start_date, c.id`);
       const data = await Promise.all(rows.map(async row => {
         // Trả tên vòng để lịch trình công khai hiển thị đúng tên do ban tổ chức đặt.
         const [rounds] = await pool.query('SELECT id,name,round_number,start_datetime,end_datetime,finalized_at FROM rounds WHERE competition_id=? ORDER BY round_number', [row.id]);
@@ -63,13 +63,13 @@ export function createPublicRouter({ pool }) {
   router.get('/exams', async (_request, response, next) => {
     // Đếm câu hỏi theo đề; khi đề gắn với vòng thì lấy cuộc thi của chính vòng đó.
     try {
-      const [rows] = await pool.query(`SELECT e.id, e.name AS title, e.description, e.passingscore, e.takingtime,
+      const [rows] = await pool.query(`SELECT e.id, e.name AS title, e.description, e.takingtime,
         (SELECT COUNT(*) FROM exam_questions eq WHERE eq.exam_id = e.id) AS questions,
         COALESCE(r.start_datetime,c.start_at) AS start_datetime, COALESCE(r.end_datetime,c.end_at) AS end_datetime,
         c.start_date, c.end_date, c.status AS competition_status
         FROM exams e LEFT JOIN rounds r ON r.id = e.round_id
         LEFT JOIN competitions c ON c.id = COALESCE(r.competition_id, e.competition_id)
-        WHERE e.is_published=1 AND c.status IN ('published','closed') ORDER BY e.id`);
+        WHERE e.is_published=1 AND c.status IN ('published','paused','closed') ORDER BY e.id`);
       response.json({ success: true, data: rows.map((row) => examToPayload(row)) });
     } catch (error) { next(error); }
   });
@@ -79,7 +79,7 @@ export function createPublicRouter({ pool }) {
       const [[setting]] = await pool.query('SELECT pinned_competition_id FROM site_settings WHERE id=1');
       const pinnedId = setting?.pinned_competition_id || null;
       const [[competition]] = await pool.query(`SELECT id, name, description, start_date, end_date, start_at, end_at FROM competitions
-        WHERE status IN ('published','closed')
+        WHERE status IN ('published','paused','closed')
         ${pinnedId ? 'AND id=?' : ''}
         ORDER BY CASE WHEN CURDATE() BETWEEN start_date AND end_date THEN 0 WHEN start_date > CURDATE() THEN 1 ELSE 2 END,
         CASE WHEN start_date > CURDATE() THEN start_date END ASC, end_date DESC, id DESC LIMIT 1`, pinnedId ? [pinnedId] : []);

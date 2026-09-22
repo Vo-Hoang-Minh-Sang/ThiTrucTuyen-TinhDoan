@@ -14,9 +14,8 @@ function statistics(sessions) {
       scores.set(key, Math.max(scores.get(key) ?? -Infinity, score));
     }
   }
-  const values = [...scores.values()], passingScore = Number(sessions[0]?.passingScore || 0);
-  const passed = values.filter(score => score >= passingScore).length;
-  return { participants: candidates.size, attempts: sessions.length, passed, failed: values.length - passed, averageScore: values.length ? Math.round(values.reduce((sum, score) => sum + score, 0) / values.length * 100) / 100 : null };
+  const values = [...scores.values()];
+  return { participants: candidates.size, attempts: sessions.length, averageScore: values.length ? Math.round((values.reduce((sum, score) => sum + score, 0) / values.length) * 100) / 100 : null };
 }
 
 // Đưa tiêu chí có giá trị lên đầu trang tính và giữ dòng tiêu đề bảng ngay sau đó.
@@ -47,7 +46,7 @@ async function readableCriteria(pool, query, { includeLookup = false } = {}) {
   } else criteria.push(['Đoàn cơ sở', 'Tất cả đoàn cơ sở']);
   if (includeLookup) {
     if (String(query.q || '').trim()) criteria.push(['Họ và tên', String(query.q).trim()]);
-    criteria.push(['Trạng thái', query.status === 'passed' ? 'Đạt' : query.status === 'failed' ? 'Không đạt' : 'Tất cả trạng thái']);
+    criteria.push(['Top \u0111ã chọn', query.top && query.top !== 'all' ? `Top ${query.top}` : 'Tất cả kết quả']);
   }
   if (query.from) criteria.push(['Từ ngày', query.from]);
   if (query.to) criteria.push(['Đến ngày', query.to]);
@@ -64,7 +63,7 @@ async function buildHierarchy(pool, user, competitionId, roundId, organizationId
   if (user.role === 'teacher') { where.push('EXISTS (SELECT 1 FROM teacher_competitions tc WHERE tc.competition_id=s.competition_id AND tc.user_id=?)'); values.push(user.id); }
   if (dates.from) { where.push('s.started_at>=?'); values.push(`${dates.from} 00:00:00`); }
   if (dates.to) { where.push('s.started_at<DATE_ADD(?,INTERVAL 1 DAY)'); values.push(`${dates.to} 00:00:00`); }
-  const [sessions] = await pool.query(`SELECT s.user_id AS userId,s.competition_id AS competitionId,c.name AS competitionName,s.round_id AS roundId,s.score,c.passing_score AS passingScore,
+  const [sessions] = await pool.query(`SELECT s.user_id AS userId,s.competition_id AS competitionId,c.name AS competitionName,s.round_id AS roundId,s.score,
     rd.round_number AS roundNumber,rd.name AS roundName,d.id AS unitId,d.ten AS unitName
     FROM user_exam_sessions s JOIN competitions c ON c.id=s.competition_id
     LEFT JOIN rounds rd ON rd.id=s.round_id LEFT JOIN donvi d ON d.id=(SELECT cr.unit_id FROM competition_registrations cr WHERE cr.user_id=s.user_id AND cr.competition_id=s.competition_id LIMIT 1)
@@ -154,7 +153,7 @@ export async function buildReport(pool, user, query) {
   attempts.forEach(row => Object.assign(entry(row), { attempts: Number(row.attempts), completed: Number(row.completed), scoreTotal: Number(row.scoreTotal) }));
   const total = { registrations: 0, attempts: 0, completed: 0, scoreTotal: 0 };
   for (const unit of units.values()) for (const key of Object.keys(total)) total[key] += unit[key];
-  const output = value => { const { scoreTotal, ...item } = value; return { ...item, averageScore: value.completed ? Math.round(scoreTotal / value.completed * 100) / 100 : null }; };
+  const output = value => { const { scoreTotal, ...item } = value; return { ...item, averageScore: value.completed ? Math.round((scoreTotal / value.completed) * 100) / 100 : null }; };
   const hierarchy = user.role === 'candidate' ? { rows: [], organizations: [], rounds: [] } : await buildHierarchy(pool, user, competitionId, roundId, organizationId, dates);
   return { summary: output(total), units: [...units.values()].sort((a, b) => a.name.localeCompare(b.name, 'vi')).map(output), rows: hierarchy.rows, organizations: hierarchy.organizations, rounds: hierarchy.rounds, filters: { competitionId, roundId, organizationId, ...dates } };
 }
@@ -164,8 +163,8 @@ async function lookupResults(pool, user, query) {
   const competitionId = positiveId(query.competitionId, 'Kỳ thi');
   const roundId = query.roundId ? positiveId(query.roundId, 'Vòng thi') : null;
   const organizationId = query.organizationId ? positiveId(query.organizationId, 'Đoàn cơ sở') : null;
-  const status = query.status || 'all';
-  if (!['all', 'passed', 'failed'].includes(status)) throw fail(400, 'Trạng thái tra cứu không hợp lệ.');
+  const top = query.top && query.top !== 'all' ? Number(query.top) : null;
+  if (top !== null && (!Number.isSafeInteger(top) || top < 1)) throw fail(400, 'Giới hạn Top không hợp lệ.');
   const keyword = String(query.q || '').trim().slice(0, 255);
   const where = ['s.competition_id=?', 's.finished_at IS NOT NULL', 's.score IS NOT NULL'], values = [competitionId];
   if (roundId) { where.push('s.round_id=?'); values.push(roundId); }
@@ -173,14 +172,16 @@ async function lookupResults(pool, user, query) {
   if (keyword) { where.push('u.hoten LIKE ?'); values.push(`%${keyword}%`); }
   if (user.role === 'teacher') { requirePermission(user, 'reports'); where.push('EXISTS (SELECT 1 FROM teacher_competitions tc WHERE tc.competition_id=s.competition_id AND tc.user_id=?)'); values.push(user.id); }
   if (user.role === 'candidate') { where.push('s.user_id=?'); values.push(user.id); }
-  const [rows] = await pool.query(`SELECT s.id,s.user_id AS userId,u.hoten,d.ten AS unitName,s.finished_at AS finishedAt,s.score,c.passing_score AS passingScore,
+  const [rows] = await pool.query(`SELECT s.id,s.user_id AS userId,u.hoten,u.email,u.dienthoai,d.ten AS unitName,s.finished_at AS finishedAt,s.score,
     TIMESTAMPDIFF(SECOND,s.started_at,s.finished_at) AS durationSeconds
     FROM user_exam_sessions s JOIN users u ON u.id=s.user_id JOIN competitions c ON c.id=s.competition_id
     LEFT JOIN competition_registrations cr ON cr.user_id=s.user_id AND cr.competition_id=s.competition_id
     LEFT JOIN donvi d ON d.id=cr.unit_id WHERE ${where.join(' AND ')}`, values);
   const ordered = [...rows].sort((a, b) => Number(b.score) - Number(a.score) || Number(a.durationSeconds) - Number(b.durationSeconds) || new Date(a.finishedAt) - new Date(b.finishedAt) || Number(a.id) - Number(b.id));
-  const best = [...new Map(ordered.map(item => [String(item.userId), item])).values()].filter(item => status === 'all' || (status === 'passed' ? Number(item.score) >= Number(item.passingScore) : Number(item.score) < Number(item.passingScore)));
-  return best.sort((a, b) => a.hoten.localeCompare(b.hoten, 'vi') || Number(a.id) - Number(b.id)).map(item => ({ id: item.id, fullName: item.hoten, unitName: item.unitName || 'Chưa chọn đơn vị', finishedAt: item.finishedAt, score: Number(item.score), status: Number(item.score) >= Number(item.passingScore) ? 'passed' : 'failed' }));
+  const best = [...new Map(ordered.map(item => [String(item.userId), item])).values()];
+  const ranked = best.sort((a, b) => Number(b.score) - Number(a.score) || Number(a.durationSeconds) - Number(b.durationSeconds) || new Date(a.finishedAt) - new Date(b.finishedAt) || Number(a.id) - Number(b.id));
+  // Hạng được xác định trước khi cắt Top để cùng một kết quả có thứ hạng thống nhất ở giao diện và tệp xuất.
+  return (top ? ranked.slice(0, top) : ranked).map((item, index) => ({ rank: index + 1, id: item.id, fullName: item.hoten, unitName: item.unitName || 'Chua chon don vi', email: item.email || '', phone: item.dienthoai || '', durationSeconds: Number(item.durationSeconds), finishedAt: item.finishedAt, score: Number(item.score) }));
 }
 
 export function createReportsRouter({ pool }) {
@@ -193,13 +194,14 @@ export function createReportsRouter({ pool }) {
     requirePermission(req.user, 'reports');
     const items = await lookupResults(pool, req.user, req.query), workbook = new ExcelJS.Workbook();
     const sheet = styledSheet(workbook, 'Tra cuu ket qua', [
-      { header: 'STT', key: 'sequence', width: 10 }, { header: 'Họ và tên', key: 'fullName', width: 32 },
-      { header: 'Đơn vị thi', key: 'unitName', width: 36 }, { header: 'Thời gian nộp bài', key: 'finishedAt', width: 24 },
-      { header: 'Trạng thái', key: 'statusLabel', width: 16 }, { header: 'Điểm thi', key: 'score', width: 14 }
+      { header: 'STT', key: 'sequence', width: 10 }, { header: 'H\u1ea1ng', key: 'rank', width: 10 }, { header: 'H\u1ecd v\u00e0 t\u00ean', key: 'fullName', width: 32 },
+      { header: '\u0110\u01a1n v\u1ecb', key: 'unitName', width: 30 }, { header: 'Email', key: 'email', width: 30 },
+      { header: 'S\u1ed1 \u0111i\u1ec7n tho\u1ea1i', key: 'phone', width: 18 }, { header: '\u0110i\u1ec3m', key: 'score', width: 12 },
+      { header: 'Th\u1eddi gian l\u00e0m b\u00e0i', key: 'durationLabel', width: 25 }, { header: 'Th\u1eddi gian n\u1ed9p b\u00e0i', key: 'finishedAt', width: 24 }
     ]);
     prependCriteria(sheet, await readableCriteria(pool, req.query, { includeLookup: true }));
     // Chỉ xuất dữ liệu backend đã lọc; không đưa nội dung người dùng vào công thức Excel.
-    sheet.addRows(items.map((item, index) => ({ ...item, sequence: index + 1, statusLabel: item.status === 'passed' ? 'Đạt' : 'Không đạt' })));
+    sheet.addRows(items.map((item, index) => ({ ...item, sequence: index + 1, durationLabel: `${Math.floor(Number(item.durationSeconds) / 60)} ph\u00fat ${Number(item.durationSeconds) % 60} gi\u00e2y` })));
     await sendWorkbook(res, workbook, 'tra-cuu-ket-qua.xlsx');
   }));
   router.get('/export', route(async (req, res) => {
@@ -208,7 +210,7 @@ export function createReportsRouter({ pool }) {
     const sheet = styledSheet(workbook, 'Thong ke', [
       { header: 'STT', key: 'sequence', width: 10 }, { header: 'Đơn vị / vòng thi', key: 'label', width: 48 },
       { header: 'Số thí sinh tham gia', key: 'participants', width: 22 }, { header: 'Số lượt thi', key: 'attempts', width: 16 },
-      { header: 'Đạt', key: 'passed', width: 12 }, { header: 'Không đạt', key: 'failed', width: 14 }, { header: 'Điểm trung bình / 100', key: 'averageScore', width: 24 }
+      { header: 'Điểm trung bình ', key: 'averageScore', width: 24 }
     ]);
     prependCriteria(sheet, await readableCriteria(pool, report.filters));
     // Đánh số giống giao diện: tổng cộng để trống, vòng là 1/2..., đơn vị là 1.1/1.2....

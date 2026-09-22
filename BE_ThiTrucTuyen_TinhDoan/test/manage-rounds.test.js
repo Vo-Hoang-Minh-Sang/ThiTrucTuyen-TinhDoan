@@ -21,7 +21,7 @@ test('round payload exposes enabled state and multi-round configuration', () => 
     competitionId: 3,
     name: 'Vòng kiến thức',
     roundNumber: 2,
-    durationMinutes: 25,
+    durationMinutes: 25, durationSeconds: 1500,
     advanceCount: 15,
     enabled: true,
     finalized: false,

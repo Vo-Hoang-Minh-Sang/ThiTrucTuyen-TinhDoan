@@ -13,7 +13,6 @@ export default new EntitySchema({
     id: { type: Number, unsigned: true, primary: true, generated: 'increment' },
     name: { type: String, length: 255 },
     description: { type: 'text', nullable: true },
-    passingscore: { type: 'decimal', precision: 5, scale: 2, default: 50 },
     // Thời lượng được tính bằng phút khi hiển thị qua API.
     takingtime: { type: Number, unsigned: true, default: 15 },
     // Cho phép NULL để giữ tương thích với đề cũ chưa được gắn cuộc thi/vòng thi.

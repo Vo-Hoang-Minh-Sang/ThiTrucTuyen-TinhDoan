@@ -12,7 +12,7 @@ test('lịch vòng phải dài hơn thời lượng làm bài, còn kỳ thi ch�
 });
 
 test('nhãn độ khó tiếng Việt trong Excel được chuẩn hóa trước khi lưu', () => {
-  const question = { competitionId: 1, roundId: 2, content: 'Câu hỏi', optionA: 'A', optionB: 'B', optionC: 'C', optionD: 'D', correctAnswer: 'A', topic: 'Chung' };
+  const question = { competitionId: 1, roundId: 2, content: 'Câu hỏi', optionA: 'A', optionB: 'B', optionC: 'C', optionD: 'D', correctAnswer: 'A' };
   assert.equal(validateQuestion({ ...question, difficulty: 'Dễ' }).difficulty, 'easy');
   assert.equal(validateQuestion({ ...question, difficulty: 'Trung bình' }).difficulty, 'medium');
   assert.equal(validateQuestion({ ...question, difficulty: 'Khó' }).difficulty, 'hard');

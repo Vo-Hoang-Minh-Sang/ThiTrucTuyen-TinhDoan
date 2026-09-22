@@ -55,7 +55,7 @@ test('Luồng chức năng đầy đủ trên MySQL cô lập qua HTTP', { skip:
   });
   await t.test('Tạo kỳ thi, câu hỏi và import Excel toàn bộ hoặc không lưu', async () => {
     competition = (await call('/manage/competitions', { token: admin, status: 201, body: { name: 'Kỳ thi tích hợp', description: 'Kiểm thử chức năng', startAt: new Date(Date.now() - 60000).toISOString(), endAt: new Date(Date.now() + 3600000).toISOString(), durationMinutes: 30, maxAttempts: 2, status: 'published' } })).item;
-    const invalid = { competitionId: competition.id, content: 'Câu kiểm thử', optionA: 'A', optionB: 'B', optionC: 'C', optionD: 'D', correctAnswer: 'E', topic: 'Chung', difficulty: 'easy' };
+    const invalid = { competitionId: competition.id, content: 'Câu kiểm thử', optionA: 'A', optionB: 'B', optionC: 'C', optionD: 'D', correctAnswer: 'E', difficulty: 'easy' };
     await call('/manage/questions', { token: admin, body: invalid, status: 400 });
     await call('/manage/questions', { token: admin, body: { ...invalid, correctAnswer: 'A' }, status: 201 });
     const response = await fetch(`${base}/manage/questions/template`, { headers: { Authorization: `Bearer ${admin}` } });
@@ -156,7 +156,7 @@ test('Luồng chức năng đầy đủ trên MySQL cô lập qua HTTP', { skip:
     const makeRound = (name,roundNumber,start,end,advanceCount) => call(`/manage/competitions/${contest.id}/rounds`,{token:admin,status:201,body:{name,roundNumber,startAt:new Date(Date.now()+start).toISOString(),endAt:new Date(Date.now()+end).toISOString(),durationMinutes:5,advanceCount}});
     const one=(await makeRound('Sơ loại',1,-1800000,1800000,1)).item;
     const two=(await makeRound('Chung kết',2,1801000,7200000,0)).item;
-    const baseQuestion={competitionId:contest.id,content:'Câu hỏi riêng của vòng',optionA:'A',optionB:'B',optionC:'C',optionD:'D',correctAnswer:'A',topic:'Chung',difficulty:'easy'};
+    const baseQuestion={competitionId:contest.id,content:'Câu hỏi riêng của vòng',optionA:'A',optionB:'B',optionC:'C',optionD:'D',correctAnswer:'A',difficulty:'easy'};
     await call('/manage/questions',{token:admin,status:400,body:baseQuestion});
     const q1=(await call('/manage/questions',{token:admin,status:201,body:{...baseQuestion,roundId:one.id}})).item;
     const q2=(await call('/manage/questions',{token:admin,status:201,body:{...baseQuestion,roundId:two.id,correctAnswer:'D'}})).item;

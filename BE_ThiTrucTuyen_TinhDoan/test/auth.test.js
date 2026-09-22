@@ -73,6 +73,11 @@ function memoryPool() {
         state.otps.push({ id, user_id: args[0], purpose: args[1], otp_hash: args[2], expires_at: Date.now() + args[3] * 60000, created_at: Date.now(), attempts: 0, verified_at: null });
         return [{ insertId: id }];
       }
+      if (sql.startsWith('select') && sql.includes('count(*) as sent') && sql.includes('from otp_verifications')) {
+        const recent = state.otps.filter(otp => otp.user_id === args[0] && otp.created_at >= Date.now() - 24 * 60 * 60 * 1000);
+        const oldest = recent.reduce((value, otp) => Math.min(value, otp.created_at), Date.now());
+        return [[{ sent: String(recent.length), retry_after: String(Math.max(0, Math.floor((oldest + 24 * 60 * 60 * 1000 - Date.now()) / 1000))) }]];
+      }
       if (sql.startsWith('select') && sql.includes('from otp_verifications')) {
         assert.match(sql, /for update$/, 'OTP row must be locked while inspecting it');
         const record = state.otps.filter(otp => otp.user_id === args[0] && otp.purpose === args[1]).at(-1);
@@ -166,6 +171,7 @@ test('SMTP failure leaves recoverable registration, expires failed OTP, and neve
   assert.equal(api.pool.state.users[0].is_active, 0);
   const identifier = registration.email;
   assert.equal((await api.request('/verify-registration', { identifier, otp: api.emails[0].otp })).status, 400);
+  api.pool.state.otps[0].created_at -= 61_000;
   const resent = await api.request('/resend-registration', { identifier });
   assert.equal(resent.status, 200);
   assert.equal(api.pool.state.users.length, 1);

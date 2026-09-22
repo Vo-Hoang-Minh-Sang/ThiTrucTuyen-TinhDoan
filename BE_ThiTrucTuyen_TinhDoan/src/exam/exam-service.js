@@ -33,8 +33,10 @@ export function readSnapshot(value) {
   }
   const ids = new Set();
   for (const question of questions) {
+    question.points = Number(question.points ?? 1);
     const key = String(question?.id);
     if (!/^\d+$/.test(key) || ids.has(key) || !choices.has(question.correctAnswer)
+      || !Number.isFinite(Number(question.points)) || Number(question.points) <= 0
       || !['content', 'optionA', 'optionB', 'optionC', 'optionD'].every(field => typeof question[field] === 'string' && question[field].trim())) {
       throw examError(409, 'Nội dung đề thi không hợp lệ. Vui lòng liên hệ quản trị viên.', 'INVALID_EXAM');
     }
@@ -58,19 +60,24 @@ export function validateAnswers(value, questions) {
 
 // Mỗi câu có trọng số như nhau; câu bỏ trống hoặc trả lời sai được tính 0 điểm.
 export function gradeAnswers(questions, answers) {
-  const correct = questions.reduce((count, question) => count + Number(answers[String(question.id)] === question.correctAnswer), 0);
-  return Math.round(correct * 10000 / questions.length) / 100;
+  // ?i?m b?i thi l? t?ng ?i?m c?a c?c c?u tr? l?i ??ng, kh?ng quy ??i v? thang 100.
+  const score = questions.reduce((total, question) => total + (answers[String(question.id)] === question.correctAnswer ? Number(question.points ?? 1) : 0), 0);
+  return Math.round(score * 100) / 100;
 }
 
 export function computeDeadline(startedAt, durationMinutes, closesAt) {
+  return computeDeadlineSeconds(startedAt, Number(durationMinutes) * 60, closesAt);
+}
+
+export function computeDeadlineSeconds(startedAt, durationSeconds, closesAt) {
   // Hạn bài là mốc sớm hơn giữa thời lượng được cấp và thời điểm vòng/kỳ thi kết thúc.
   const start = date(startedAt);
   const end = date(closesAt);
-  const duration = Number(durationMinutes);
+  const duration = Number(durationSeconds);
   if (!start || !end || !Number.isInteger(duration) || duration < 1 || end <= start) {
     throw examError(409, 'Kỳ thi chưa có lịch hoặc thời lượng hợp lệ.', 'INVALID_SCHEDULE');
   }
-  return new Date(Math.min(start.getTime() + duration * 60_000, end.getTime()));
+  return new Date(Math.min(start.getTime() + duration * 1_000, end.getTime()));
 }
 
 export function sessionToPayload(session, details, now) {
@@ -82,9 +89,9 @@ export function sessionToPayload(session, details, now) {
     // Liệt kê rõ trường công khai, tuyệt đối không đưa khóa đáp án hoặc dữ liệu phân loại ra trình duyệt.
     questions: questions.map(({ id, content, optionA, optionB, optionC, optionD }) => ({ id, content, optionA, optionB, optionC, optionD })),
     answers: validateAnswers(parseJson(session.answers) ?? {}, questions),
-    revision: Number(session.revision), startedAt: iso(session.started_at), expiresAt: iso(session.expires_at),
+    revision: Number(session.revision), startedAt: iso(session.started_at), expiresAt: iso(details.competitionStatus === 'paused' && details.pausedAt ? new Date(date(session.expires_at).getTime() + Math.max(0, now.getTime() - date(details.pausedAt).getTime())) : session.expires_at),
     finishedAt: iso(session.finished_at), durationSeconds: session.finished_at ? Math.max(0, Math.floor((date(session.finished_at) - date(session.started_at)) / 1000)) : null,
-    serverNow: iso(now), status: session.status, score: session.score === null || session.score === undefined ? null : Number(session.score),
+    serverNow: iso(now), status: session.status, paused: details.competitionStatus === 'paused', score: session.score === null || session.score === undefined ? null : Number(session.score),
     attemptNumber: Number(session.attempt_number)
   };
 }
@@ -99,7 +106,7 @@ async function serverTime(tx) {
 
 async function detailsFor(tx, session) {
   // Bổ sung tên kỳ thi, vòng và đề cho payload mà không tin dữ liệu từ client.
-  const [[details]] = await tx.query(`SELECT c.name AS competitionName, e.name AS examName, e.code AS examCode, rd.name AS roundName
+  const [[details]] = await tx.query(`SELECT c.name AS competitionName, c.status AS competitionStatus, c.paused_at AS pausedAt, e.name AS examName, e.code AS examCode, rd.name AS roundName
     FROM exams e JOIN competitions c ON c.id = ? LEFT JOIN rounds rd ON rd.id=e.round_id WHERE e.id = ?`, [session.competition_id, session.exam_id]);
   if (!details) throw examError(404, 'Không tìm thấy kỳ thi hoặc đề thi của bài làm.', 'NOT_FOUND');
   return details;
@@ -107,6 +114,12 @@ async function detailsFor(tx, session) {
 
 async function payloadFor(tx, session, now) {
   return sessionToPayload(session, await detailsFor(tx, session), now);
+}
+
+async function competitionPaused(tx, competitionId) {
+  // Kiểm tra trong chính giao dịch để không ghi đáp án hoặc chấm bài sau thời điểm tạm đóng.
+  const [[competition]] = await tx.query('SELECT status FROM competitions WHERE id=? FOR SHARE', [competitionId]);
+  return competition?.status === 'paused';
 }
 
 async function lockUser(tx, userId) {
@@ -167,7 +180,7 @@ function competitionPayload(row, now) {
     startAt: iso(start), endAt: iso(end), durationMinutes: Number(row.duration_minutes), maxAttempts: Number(row.max_attempts),
     attemptsUsed: used, attemptsRemaining: Math.max(0, Number(row.max_attempts) - used),
     registered: Number(row.registered) > 0, activeSessionId: row.activeSessionId ?? null,
-    status: row.status === 'closed' ? 'closed' : !scheduled ? 'unscheduled' : now < start ? 'upcoming' : now >= end ? 'ended' : 'active'
+    status: row.status === 'paused' ? 'paused' : row.status === 'closed' ? 'closed' : !scheduled ? 'unscheduled' : now < start ? 'upcoming' : now >= end ? 'ended' : 'active'
   };
 }
 
@@ -177,6 +190,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
     async competitions(userId, { from, to } = {}) {
       // Trả danh sách kỳ thi cùng trạng thái từng vòng cho riêng thí sinh hiện tại.
       const now = await serverTime(pool);
+      // Ky thi tam dong khong xuat hien trong danh sach cua thi sinh.
       const filters = ["c.status IN ('published','closed')"];
       const params = [userId, userId, userId, now];
       if (from) { filters.push('c.end_at >= ?'); params.push(from); }
@@ -196,7 +210,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
           let eligible = true, eligibilityMessage = '';
           try { await checkRoundEligibility(pool,userId,round); } catch (error) { if (!error.status) throw error; eligible=false; eligibilityMessage=error.message; }
           const participation = roundParticipation({ round, competition: row, now, registered: item.registered, eligible, eligibilityMessage, used: Number(counts.used), completed: Number(counts.completed), activeSessionId: counts.activeSessionId, hasExam: Boolean(exam) });
-          return { id: round.id, name: round.name || `Vòng ${round.round_number}`, roundNumber: Number(round.round_number), startAt: iso(round.start_datetime), endAt: iso(round.end_datetime), durationMinutes: Number(round.duration_minutes), finalized: Boolean(round.finalized_at), eligible, attemptsUsed: Number(counts.used), attemptsRemaining: Math.max(0,Number(row.max_attempts)-Number(counts.used)), activeSessionId: counts.activeSessionId, ...participation };
+          return { id: round.id, name: round.name || `Vòng ${round.round_number}`, roundNumber: Number(round.round_number), startAt: iso(round.start_datetime), endAt: iso(round.end_datetime), durationMinutes: Number(round.duration_minutes), durationSeconds: Number(round.duration_seconds ?? Number(round.duration_minutes) * 60), finalized: Boolean(round.finalized_at), eligible, attemptsUsed: Number(counts.used), attemptsRemaining: Math.max(0,Number(row.max_attempts)-Number(counts.used)), activeSessionId: counts.activeSessionId, ...participation };
         }));
         item.currentRoundId = item.rounds.find(r=>r.scheduleStatus==='active'&&!r.finalized)?.id || item.rounds.find(r=>r.scheduleStatus==='upcoming'&&!r.finalized)?.id || item.rounds.at(-1)?.id || null;
         return item;
@@ -209,8 +223,15 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         const user = await lockUser(tx, userId);
         const [[competition]] = await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
         const now = await serverTime(tx);
+        if (competition?.status === 'paused') throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         if (!competition || competition.status !== 'published') throw examError(404, 'Không tìm thấy kỳ thi đã xuất bản.', 'NOT_FOUND');
         if (date(competition.end_at) && now >= date(competition.end_at)) throw examError(409, 'Kỳ thi đã kết thúc đăng ký.', 'REGISTRATION_CLOSED');
+        // Đăng ký chỉ mở đến khi vòng đầu tiên kết thúc; không dùng vòng đang chọn trên giao diện.
+        const [[firstRound]] = await tx.query(`SELECT end_datetime FROM rounds
+          WHERE competition_id=? AND enabled=1 ORDER BY round_number,id LIMIT 1 FOR SHARE`, [competitionId]);
+        if (firstRound?.end_datetime && now >= date(firstRound.end_datetime)) {
+          throw examError(409, 'Đã hết thời gian đăng ký vì vòng thi thứ nhất đã kết thúc.', 'REGISTRATION_CLOSED');
+        }
         return registrationFor(tx, user, competitionId);
       });
     },
@@ -223,7 +244,8 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         const [[registration]] = await tx.query(`SELECT registered_at FROM competition_registrations
           WHERE user_id = ? AND competition_id = ?`, [userId, competitionId]);
         if (!registration) throw examError(403, 'Bạn cần đăng ký cuộc thi này trước khi làm bài.', 'REGISTRATION_REQUIRED');
-        await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
+        const [[initialCompetition]] = await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
+        if (initialCompetition?.status === 'paused') throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         const [rounds] = await tx.query('SELECT * FROM rounds WHERE competition_id=? AND enabled=1 ORDER BY round_number,id', [competitionId]);
         const clock = await serverTime(tx);
         const round = requestedRoundId ? rounds.find(r => String(r.id) === String(requestedRoundId)) : rounds.find(r => date(r.start_datetime) <= clock && clock < date(r.end_datetime) && !r.finalized_at);
@@ -262,7 +284,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
           if (!exam) throw examError(409, 'Đề thi vừa thay đổi. Vui lòng thử bắt đầu lại.', 'EXAM_CHANGED');
           const questions = readSnapshot(exam.question_snapshot);
           now = await serverTime(tx);
-          const expiresAt = computeDeadline(now, round?.duration_minutes || competition.duration_minutes, end);
+          const expiresAt = round ? computeDeadlineSeconds(now, Number(round.duration_seconds ?? Number(round.duration_minutes) * 60), end) : computeDeadline(now, competition.duration_minutes, end);
           const [created] = await tx.query(`INSERT INTO user_exam_sessions
             (user_id, exam_id, competition_id, question_ids, question_snapshot, answers, started_at, expires_at, status, revision, attempt_number, updated_at, round_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', 0, ?, ?, ?)`,
@@ -287,9 +309,22 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         await lockUser(tx, userId);
         let session = await lockSession(tx, sessionId, userId);
         const now = await serverTime(tx);
+        if (await competitionPaused(tx, session.competition_id)) return payloadFor(tx, session, now);
         if (isExpired(session, now)) session = await finishSession(tx, session, now, true);
         return payloadFor(tx, session, now);
       });
+    },
+
+    async sessionStatus(userId, sessionId) {
+      // Endpoint nhẹ cho trình duyệt kiểm tra tạm đóng, không khóa phiên hay đọc nội dung bài thi.
+      const [[item]] = await pool.query(`SELECT s.status AS sessionStatus, s.expires_at AS expiresAt, c.status AS competitionStatus, c.paused_at AS pausedAt,
+        CURRENT_TIMESTAMP AS serverNow FROM user_exam_sessions s JOIN competitions c ON c.id=s.competition_id
+        WHERE s.id=? AND s.user_id=?`, [sessionId, userId]);
+      if (!item) throw examError(404, 'Không tìm thấy bài làm.', 'NOT_FOUND');
+      // Gửi lại hạn nộp vì nó có thể được gia hạn sau khi cuộc thi mở lại.
+      const now = date(item.serverNow);
+      const expiresAt = item.competitionStatus === 'paused' && item.pausedAt ? new Date(date(item.expiresAt).getTime() + Math.max(0, now.getTime() - date(item.pausedAt).getTime())) : item.expiresAt;
+      return { status: item.sessionStatus, expiresAt: iso(expiresAt), paused: item.competitionStatus === 'paused', serverNow: iso(item.serverNow) };
     },
 
     async save(userId, sessionId, { answers, revision }) {
@@ -298,6 +333,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         await lockUser(tx, userId);
         let session = await lockSession(tx, sessionId, userId);
         const now = await serverTime(tx);
+        if (await competitionPaused(tx, session.competition_id)) throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         if (isExpired(session, now)) session = await finishSession(tx, session, now, true);
         if (session.status !== 'in_progress') return payloadFor(tx, session, now);
         if (!validRevision(revision)) throw examError(400, 'Phiên bản bài làm không hợp lệ.', 'INVALID_REVISION');
@@ -317,6 +353,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         await lockUser(tx, userId);
         let session = await lockSession(tx, sessionId, userId);
         const now = await serverTime(tx);
+        if (await competitionPaused(tx, session.competition_id)) throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         if (session.status !== 'in_progress') return payloadFor(tx, session, now);
         if (isExpired(session, now)) return payloadFor(tx, await finishSession(tx, session, now, true), now);
         if (Object.hasOwn(body, 'answers')) {
@@ -353,8 +390,9 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
 // Worker xử lý cả khi thí sinh đóng trình duyệt; mỗi phiên chấm trong giao dịch riêng để không khóa cả danh sách.
 export async function finalizeExpiredSessions(pool, { limit = 100 } = {}) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError('INVALID_EXPIRATION_BATCH_SIZE');
-  const [rows] = await pool.query(`SELECT id, user_id FROM user_exam_sessions
-    WHERE status = 'in_progress' AND expires_at <= CURRENT_TIMESTAMP AND question_snapshot IS NOT NULL
+  const [rows] = await pool.query(`SELECT s.id, s.user_id FROM user_exam_sessions s
+    JOIN competitions c ON c.id=s.competition_id
+    WHERE s.status = 'in_progress' AND s.expires_at <= CURRENT_TIMESTAMP AND s.question_snapshot IS NOT NULL AND c.status<>'paused'
     ORDER BY expires_at, id LIMIT ${limit}`);
   let processed = 0;
   let failed = 0;
@@ -365,6 +403,7 @@ export async function finalizeExpiredSessions(pool, { limit = 100 } = {}) {
         await lockUser(tx, row.user_id);
         const session = await lockSession(tx, row.id);
         const now = await serverTime(tx);
+        if (await competitionPaused(tx, session.competition_id)) return false;
         if (!isExpired(session, now)) return false;
         await finishSession(tx, session, now, true);
         return true;

@@ -7,8 +7,8 @@ export default new EntitySchema({
   columns: {
     round_id: { type: Number, unsigned: true, nullable: true },
     competition_id: { type: Number, unsigned: true, nullable: true },
-    topic: { type: String, length: 120, default: 'Chung' },
     difficulty: { type: String, length: 20, default: 'medium' },
+    points: { type: 'decimal', precision: 10, scale: 2, default: 1 },
     created_by: { type: Number, unsigned: true, nullable: true },
     archived_at: { type: 'datetime', nullable: true },
     id: { type: Number, unsigned: true, primary: true, generated: 'increment' },

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createAccess, requireRoles } from '../auth/access.js';
 import { createCandidateService, examError } from './exam-service.js';
+import { createRateLimiter } from '../auth/security.js';
 
 export { finalizeExpiredSessions } from './exam-service.js';
 
@@ -44,8 +45,21 @@ function route(handler) {
 
 export function createCandidateRouter({ pool, env = process.env }) {
   const router = Router();
+  const limiter = createRateLimiter();
   const service = createCandidateService({ pool });
   router.use(createAccess({ pool, env }), requireRoles('candidate'));
+  // Lưu đáp án được phép nhiều lần để không cản trở thao tác thi, còn mở bài và nộp bài có ngưỡng riêng.
+  router.use((request, response, next) => {
+    const policy = request.path.endsWith('/answers') ? { scope: 'answer-save', limit: 120, windowMs: 60 * 1000 }
+      : request.path.endsWith('/submit') ? { scope: 'submit', limit: 10, windowMs: 60 * 1000 }
+        : request.path.endsWith('/start') ? { scope: 'start', limit: 12, windowMs: 60 * 1000 }
+          : request.path.endsWith('/register') ? { scope: 'register', limit: 5, windowMs: 60 * 60 * 1000 } : null;
+    if (!policy) return next();
+    const attempt = limiter.consume(policy.scope, request.user.id, policy.limit, policy.windowMs);
+    if (attempt.allowed) return next();
+    response.set('Retry-After', String(attempt.retryAfter));
+    return response.status(429).json({ success: false, code: 'RATE_LIMITED', message: 'Bạn thao tác quá nhanh. Vui lòng thử lại sau.', retryAfter: attempt.retryAfter });
+  });
   router.get('/competitions', route(async (request, response) => {
     const from = dateFilter(request.query.from);
     const to = dateFilter(request.query.to, true);
@@ -62,6 +76,9 @@ export function createCandidateRouter({ pool, env = process.env }) {
   }));
   router.get('/sessions/:id', route(async (request, response) => {
     response.json({ success: true, item: await service.session(request.user.id, id(request.params.id)) });
+  }));
+  router.get('/sessions/:id/status', route(async (request, response) => {
+    response.json({ success: true, item: await service.sessionStatus(request.user.id, id(request.params.id)) });
   }));
   router.put('/sessions/:id/answers', route(async (request, response) => {
     response.json({ success: true, item: await service.save(request.user.id, id(request.params.id), body(request)) });

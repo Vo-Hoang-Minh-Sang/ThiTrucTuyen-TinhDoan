@@ -22,8 +22,9 @@ export function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 export const iso = value => value ? new Date(value).toISOString() : null;
-export async function audit(db, actorId, action, targetType, targetId) {
-  await db.query('INSERT INTO audit_logs (actor_id, action, target_type, target_id) VALUES (?, ?, ?, ?)', [actorId, action, targetType, targetId == null ? null : String(targetId)]);
+export async function audit(db, actorId, action, targetType, targetId, details = null) {
+  // Lưu dữ liệu tại thời điểm thao tác để nhật ký vẫn có tên kỳ thi sau này đổi tên hoặc bị xóa.
+  await db.query('INSERT INTO audit_logs (actor_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?)', [actorId, action, targetType, targetId == null ? null : String(targetId), details == null ? null : JSON.stringify(details)]);
 }
 export function requirePermission(user, permission) {
   if (user.role !== 'admin' && (user.role !== 'teacher' || !user.permissions?.includes(permission))) throw fail(403, 'Bạn không có quyền thực hiện chức năng này.', 'FORBIDDEN');

@@ -7,8 +7,8 @@ import {
 } from '../src/exam/exam-service.js';
 
 const questions = [
-  { id: 1, content: 'Câu một', optionA: 'A1', optionB: 'B1', optionC: 'C1', optionD: 'D1', correctAnswer: 'A', topic: 'Chủ đề', difficulty: 'easy' },
-  { id: 2, content: 'Câu hai', optionA: 'A2', optionB: 'B2', optionC: 'C2', optionD: 'D2', correctAnswer: 'C', topic: 'Chủ đề', difficulty: 'medium' }
+  { id: 1, content: 'Câu một', optionA: 'A1', optionB: 'B1', optionC: 'C1', optionD: 'D1', correctAnswer: 'A', difficulty: 'easy' },
+  { id: 2, content: 'Câu hai', optionA: 'A2', optionB: 'B2', optionC: 'C2', optionD: 'D2', correctAnswer: 'C', difficulty: 'medium' }
 ];
 const initialTime = new Date('2026-09-10T01:00:00Z');
 
@@ -48,6 +48,8 @@ function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z', registered =
     sql = sql.replace(/\s+/g, ' ').trim();
     if (sql === 'SELECT CURRENT_TIMESTAMP AS server_now') return [[{ server_now: state.now }]];
     if (sql.startsWith('SELECT id, donviID FROM users')) return [state.users.filter(user => matches(user.id, args[0]))];
+    if (sql.startsWith('SELECT end_datetime FROM rounds')) return [[]];
+    if (sql.startsWith('SELECT status FROM competitions')) return [[{ status: state.competition.status }]];
     if (sql.startsWith('SELECT * FROM rounds')) return [[]];
     if (sql.startsWith('SELECT * FROM competitions')) return [matches(state.competition.id, args[0]) ? [state.competition] : []];
     if (sql.includes('FROM user_exam_sessions WHERE user_id = ? AND competition_id = ? AND status')) {
@@ -73,7 +75,7 @@ function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z', registered =
     if (sql.includes('FROM user_exam_sessions WHERE id = ?')) return [structuredClone(state.sessions.filter(item => matches(item.id, args[0]) && (args.length === 1 || matches(item.user_id, args[1]))))];
     if (sql.startsWith('SELECT c.name AS competitionName')) {
       const exam = state.exams.find(item => matches(item.id, args[1]));
-      return [[{ competitionName: state.competition.name, examName: exam.name, examCode: exam.code }]];
+      return [[{ competitionName: state.competition.name, competitionStatus: state.competition.status, examName: exam.name, examCode: exam.code }]];
     }
     if (sql.startsWith('UPDATE user_exam_sessions SET answers')) {
       const session = state.sessions.find(item => matches(item.id, args[2]));
@@ -90,7 +92,7 @@ function fixture({ maxAttempts = 1, endAt = '2026-09-10T02:00:00Z', registered =
       state.results.push({ id: state.results.length + 1, user_id: args[0], exam_id: args[1], session_id: args[2], score: args[3], finished_at: args[4] });
       return [{ affectedRows: 1 }];
     }
-    if (sql.startsWith('SELECT id, user_id FROM user_exam_sessions')) {
+    if (sql.startsWith('SELECT s.id, s.user_id FROM user_exam_sessions') || sql.startsWith('SELECT id, user_id FROM user_exam_sessions')) {
       return [state.sessions.filter(item => item.status === 'in_progress' && item.expires_at <= state.now).map(({ id, user_id }) => ({ id, user_id }))];
     }
     throw new Error(`Unexpected query: ${sql}`);
@@ -124,9 +126,9 @@ test('only answers to snapshot questions are accepted and blank selections can b
     assert.throws(() => validateAnswers(answers, questions), { code: 'INVALID_ANSWERS' });
   }
   assert.equal(gradeAnswers(questions, {}), 0);
-  assert.equal(gradeAnswers(questions, { 1: 'A' }), 50);
-  assert.equal(gradeAnswers(questions, { 1: 'A', 2: 'C' }), 100);
-  assert.equal(gradeAnswers([...questions, { ...questions[0], id: 3 }], { 1: 'A' }), 33.33);
+  assert.equal(gradeAnswers(questions, { 1: 'A' }), 1);
+  assert.equal(gradeAnswers(questions, { 1: 'A', 2: 'C' }), 2);
+  assert.equal(gradeAnswers([...questions, { ...questions[0], id: 3 }], { 1: 'A' }), 1);
 });
 
 test('invalid or duplicate snapshot questions are rejected and payload never exposes answer keys', () => {
@@ -189,7 +191,7 @@ test('parallel submit is idempotent and a finished attempt consumes its quota', 
     f.service.submit(1, session.id, { answers: { 1: 'A', 2: 'C' }, revision: 0 }),
     f.service.submit(1, session.id, { answers: {}, revision: 0 })
   ]);
-  assert.equal(first.score, 100);
+  assert.equal(first.score, 2);
   assert.deepEqual(first, repeated);
   assert.equal(f.state.results.length, 1);
   await assert.rejects(() => f.service.start(1, 7), { status: 409, code: 'ATTEMPT_LIMIT' });
@@ -213,7 +215,7 @@ test('deadline rejects late answers and grades only progress saved on time', asy
     f.state.now = new Date(session.expiresAt);
     const final = await f.service[action](1, session.id, { answers: { 1: 'A', 2: 'C' }, revision: 1 });
     assert.equal(final.status, 'expired');
-    assert.equal(final.score, 50);
+    assert.equal(final.score, 1);
     assert.deepEqual(final.answers, { 1: 'A' });
     assert.equal(f.state.results[0].finished_at.toISOString(), session.expiresAt);
   }
@@ -227,7 +229,7 @@ test('background expiration grades closed browsers and does not create duplicate
   const batches = await Promise.all([finalizeExpiredSessions(f.pool), finalizeExpiredSessions(f.pool)]);
   assert.equal(batches.reduce((count, item) => count + item.processed, 0), 1);
   assert.equal(f.state.results.length, 1);
-  assert.equal(f.state.results[0].score, 50);
+  assert.equal(f.state.results[0].score, 1);
   assert.equal(f.state.sessions[0].status, 'expired');
 });
 
@@ -249,7 +251,7 @@ test('each new attempt receives an immutable snapshot and the next attempt numbe
   const restored = await f.service.session(1, first.id);
   assert.equal(restored.questions[0].content, 'Câu một');
   const submitted = await f.service.submit(1, first.id, { answers: { 1: 'A' }, revision: 0 });
-  assert.equal(submitted.score, 50);
+  assert.equal(submitted.score, 1);
   const second = await f.service.start(1, 7);
   assert.equal(second.attemptNumber, 2);
   assert.equal(second.questions[0].content, 'Nội dung mới');

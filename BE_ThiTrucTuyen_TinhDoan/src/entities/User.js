@@ -9,6 +9,7 @@ export default new EntitySchema({
     hoten: { type: String, length: 255 },
     dienthoai: { type: String, length: 30, nullable: true, unique: true },
     email: { type: String, length: 255, nullable: true, unique: true },
+    chuc_vu: { type: String, length: 100, default: 'Đoàn viên' },
     donviID: { type: Number, nullable: true, unsigned: true },
     // Chỉ lưu mật khẩu đã băm, không lưu mật khẩu người dùng nhập trực tiếp.
     password: { type: String, length: 255 },
@@ -20,7 +21,6 @@ export default new EntitySchema({
     must_change_password: { type: Boolean, default: false },
     // Tăng phiên bản để thu hồi các JWT đã phát hành trước đó.
     token_version: { type: Number, unsigned: true, default: 0 },
-    sort_by: { type: Number, default: 0 },
     time_register: { type: 'datetime', createDate: true }
   },
   relations: { donvi: { type: 'many-to-one', target: 'DonVi', joinColumn: { name: 'donviID' }, inverseSide: 'users' } }

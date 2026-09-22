@@ -7,6 +7,7 @@ export default new EntitySchema({
   columns: {
     name: { type: String, length: 255, nullable: true },
     duration_minutes: { type: Number, unsigned: true, default: 30 },
+    duration_seconds: { type: Number, unsigned: true },
     advance_count: { type: Number, unsigned: true, default: 0 },
     enabled: { type: Boolean, default: false },
     finalized_at: { type: 'datetime', nullable: true },

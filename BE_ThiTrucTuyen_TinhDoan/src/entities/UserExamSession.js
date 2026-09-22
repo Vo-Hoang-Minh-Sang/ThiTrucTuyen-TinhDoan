@@ -20,7 +20,7 @@ export default new EntitySchema({
     question_ids: { type: 'json' },
     answers: { type: 'json', nullable: true },
     // Điểm và thời điểm kết thúc có thể chưa có trong phiên đang lưu dở.
-    score: { type: 'decimal', precision: 5, scale: 2, nullable: true },
+    score: { type: 'decimal', precision: 12, scale: 2, nullable: true },
     started_at: { type: 'datetime', createDate: true },
     finished_at: { type: 'datetime', nullable: true }
   },

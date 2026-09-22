@@ -13,10 +13,11 @@ export default new EntitySchema({
     duration_minutes: { type: Number, unsigned: true, default: 30 },
     max_attempts: { type: Number, unsigned: true, default: 1 },
     // Điểm tối thiểu để được xét đi tiếp ở mọi vòng của kỳ thi.
-    passing_score: { type: 'decimal', precision: 5, scale: 2, default: 0 },
     start_at: { type: 'datetime', nullable: true },
     end_at: { type: 'datetime', nullable: true },
     status: { type: String, length: 20, default: 'draft' },
+    // Mốc tạm dừng dùng để gia hạn các bài đang làm khi quản trị viên mở lại kỳ thi.
+    paused_at: { type: 'datetime', nullable: true },
     created_by: { type: Number, unsigned: true, nullable: true },
     created_at: { type: 'timestamp', createDate: true }
   },

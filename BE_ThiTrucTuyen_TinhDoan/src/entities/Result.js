@@ -14,7 +14,7 @@ export default new EntitySchema({
     exam_id: { type: Number, unsigned: true },
     // Mỗi phiên tối đa một kết quả; NULL dành cho bản ghi cũ chưa có liên kết phiên.
     session_id: { type: 'bigint', unsigned: true, nullable: true, unique: true },
-    score: { type: 'decimal', precision: 5, scale: 2, default: 0 },
+    score: { type: 'decimal', precision: 12, scale: 2, default: 0 },
     finished_at: { type: 'datetime' }
   },
   relations: {

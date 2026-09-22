@@ -6,10 +6,12 @@ import { createCandidateRouter } from './exam/candidate.js';
 import { createManageRouter } from './management/manage.js';
 import { createReportsRouter } from './management/reports.js';
 import { createSiteRouter } from './site/assets.js';
+import { createRateLimiter } from './auth/security.js';
 
 // Chỉ tạo ứng dụng Express, không mở cổng máy chủ hay thay đổi cơ sở dữ liệu.
 export function createApp({ pool, sendOtpEmail }) {
   const app = express();
+  const requestLimiter = createRateLimiter();
   // Cấu hình số lớp proxy được tin cậy để xác định IP dùng cho giới hạn yêu cầu.
   const proxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
   if (!Number.isInteger(proxyHops) || proxyHops < 0 || proxyHops > 5) throw new Error('TRUST_PROXY_HOPS must be an integer between 0 and 5.');
@@ -25,6 +27,17 @@ export function createApp({ pool, sendOtpEmail }) {
   app.use((request, response, next) => {
     if (['POST', 'PUT', 'PATCH'].includes(request.method) && request.is('application/json') && (!request.body || typeof request.body !== 'object' || Array.isArray(request.body))) return response.status(400).json({ success: false, message: 'Nội dung yêu cầu phải là đối tượng JSON.' });
     next();
+  });
+  // Áp dụng giới hạn theo IP trước khi đi vào router để chặn quét API và tải tệp liên tục.
+  app.use('/api', (request, response, next) => {
+    const upload = request.method === 'POST' && ['/manage/questions/import', '/manage/units/import', '/manage/assets'].includes(request.path);
+    const policy = upload ? { scope: 'upload', limit: 10, windowMs: 10 * 60 * 1000 }
+      : request.path.startsWith('/candidate/') ? { scope: 'candidate-ip', limit: 3000, windowMs: 60 * 1000 }
+        : { scope: 'api', limit: 300, windowMs: 60 * 1000 };
+    const attempt = requestLimiter.consume(policy.scope, request.ip || 'unknown', policy.limit, policy.windowMs);
+    if (attempt.allowed) return next();
+    response.set('Retry-After', String(attempt.retryAfter));
+    return response.status(429).json({ success: false, code: 'RATE_LIMITED', message: 'Bạn thao tác quá nhanh. Vui lòng thử lại sau.', retryAfter: attempt.retryAfter });
   });
   app.use('/api/auth', createAuthRouter({ pool, sendOtpEmail }));
   app.use('/api/candidate', createCandidateRouter({ pool }));

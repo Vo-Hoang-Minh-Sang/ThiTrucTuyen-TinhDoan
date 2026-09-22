@@ -5,6 +5,14 @@ import { BonusPrediction1789700000000 } from '../src/migrations/1789700000000-Bo
 import { QuestionRoundScope1789800000000 } from '../src/migrations/1789800000000-QuestionRoundScope.js';
 import { CompetitionPassingScore1789900000000 } from '../src/migrations/1789900000000-CompetitionPassingScore.js';
 import { RemoveBonusPrediction1790000000000 } from '../src/migrations/1790000000000-RemoveBonusPrediction.js';
+import { RemoveQuestionTopic1790100000000 } from '../src/migrations/1790100000000-RemoveQuestionTopic.js';
+import { QuestionPoints1790200000000 } from '../src/migrations/1790200000000-QuestionPoints.js';
+import { RemovePassingScores1790300000000 } from '../src/migrations/1790300000000-RemovePassingScores.js';
+import { WidenExamScores1790400000000 } from '../src/migrations/1790400000000-WidenExamScores.js';
+import { RemoveUserSortBy1790500000000 } from '../src/migrations/1790500000000-RemoveUserSortBy.js';
+import { RoundDurationSeconds1790600000000 } from '../src/migrations/1790600000000-RoundDurationSeconds.js';
+import { AuditLogDetails1790700000000 } from '../src/migrations/1790700000000-AuditLogDetails.js';
+import { UserPosition1790800000000 } from '../src/migrations/1790800000000-UserPosition.js';
 // Kiểm thử cấu trúc và khả năng chạy lại migration mà không cần MySQL thật.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,6 +20,7 @@ import { readdir } from 'node:fs/promises';
 import { DataSource } from 'typeorm';
 import { InitialSchema1788912000000 } from '../src/migrations/1788912000000-InitialSchema.js';
 import { ExamPlatform1789000000000 } from '../src/migrations/1789000000000-ExamPlatform.js';
+import { CompetitionPause1789100000000 } from '../src/migrations/1789100000000-CompetitionPause.js';
 
 function splitDefinitions(sql) {
   // Không tách dấu phẩy bên trong ENUM, chuỗi hoặc khai báo kiểu như DECIMAL(5,2).
@@ -84,9 +93,9 @@ class SchemaRunner {
     } else if ((match = sql.match(/^ALTER TABLE `([^`]+)` DROP COLUMN `([^`]+)`$/))) {
       const table = this.tables.get(match[1]);
       table.columns = table.columns.filter(column => column.name !== match[2]);
-    } else if ((match = sql.match(/^ALTER TABLE users MODIFY COLUMN email (.*)$/))) {
-      const columns = this.tables.get('users').columns;
-      columns[columns.findIndex((column) => column.name === 'email')] = columnFrom('email', match[1]);
+    } else if ((match = sql.match(/^ALTER TABLE `?([^` ]+)`? MODIFY COLUMN `?([^` ]+)`? (.*)$/))) {
+      const columns = this.tables.get(match[1]).columns;
+      columns[columns.findIndex((column) => column.name === match[2])] = columnFrom(match[2], match[3]);
     } else if ((match = sql.match(/^CREATE UNIQUE INDEX `[^`]+` ON `([^`]+)` \((.*)\)$/))) {
       this.tables.get(match[1]).uniques.push({ columnNames: namesIn(match[2]) });
     } else if ((match = sql.match(/^SELECT 1 FROM `([^`]+)`.*GROUP BY (.*) HAVING/))) {
@@ -97,7 +106,7 @@ class SchemaRunner {
       this.tables.get('otp_verifications').indices.push({ columnNames: ['user_id', 'purpose', 'expires_at'] });
     } else if ((match = sql.match(/^CREATE INDEX `([^`]+)` ON `([^`]+)` \((.*)\)$/))) {
       this.tables.get(match[2]).indices.push({ name: match[1], columnNames: namesIn(match[3]) });
-    } else if (sql.startsWith('SELECT DISTINCT competition_id FROM questions') || sql.startsWith('UPDATE questions SET round_id=')) {
+    } else if (sql.startsWith('SELECT DISTINCT competition_id FROM questions') || sql.startsWith('UPDATE questions SET round_id=') || sql.startsWith('UPDATE `questions` SET `points`=')) {
       // Migration dữ liệu chỉ có ý nghĩa trên MySQL thật; schema giả không chứa bản ghi cần chuyển đổi.
       return [];
     } else if (sql === "UPDATE user_exam_sessions SET status = 'submitted' WHERE finished_at IS NOT NULL AND status = 'in_progress'") {
@@ -118,6 +127,7 @@ async function freshSchema() {
 test('all migrations create 21 entity tables and compatible foreign keys', async () => {
   const runner = await freshSchema();
   await new ExamPlatform1789000000000().up(runner);
+  await new CompetitionPause1789100000000().up(runner);
   await new RoundProgression1789400000000().up(runner);
   await new HomeContent1789500000000().up(runner);
   await new PinnedCompetition1789600000000().up(runner);
@@ -125,6 +135,14 @@ test('all migrations create 21 entity tables and compatible foreign keys', async
   await new QuestionRoundScope1789800000000().up(runner);
   await new CompetitionPassingScore1789900000000().up(runner);
   await new RemoveBonusPrediction1790000000000().up(runner);
+  await new RemoveQuestionTopic1790100000000().up(runner);
+  await new QuestionPoints1790200000000().up(runner);
+  await new RemovePassingScores1790300000000().up(runner);
+  await new WidenExamScores1790400000000().up(runner);
+  await new RemoveUserSortBy1790500000000().up(runner);
+  await new RoundDurationSeconds1790600000000().up(runner);
+  await new AuditLogDetails1790700000000().up(runner);
+  await new UserPosition1790800000000().up(runner);
   const directory = new URL('../src/entities/', import.meta.url);
   const entities = await Promise.all((await readdir(directory)).filter((name) => name.endsWith('.js')).map(async (name) => (await import(new URL(name, directory))).default));
   const source = new DataSource({ type: 'mysql', database: 'offline_schema_test', entities });
@@ -142,6 +160,7 @@ test('all migrations create 21 entity tables and compatible foreign keys', async
   }
   assert.ok(runner.tables.get('results').uniques.some((index) => index.columnNames.includes('session_id')));
   assert.ok(runner.tables.get('users').uniques.some((index) => index.columnNames.includes('dienthoai')));
+  assert.ok(!runner.tables.get('users').columns.some((column) => column.name === 'sort_by'));
 });
 
 test('running the baseline against an already upgraded schema makes no changes', async () => {

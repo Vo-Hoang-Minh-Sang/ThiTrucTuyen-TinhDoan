@@ -9,6 +9,18 @@ import { assetUrl } from '../shared/api';
 import { Notice, ResourceState, Table, formatDate, roleNames, useResource } from '../shared/ui';
 import '../shared/styles.css';
 
+// URL hash lưu màn hình đang mở để nút Quay lại/Tiến tới của trình duyệt hoạt động với giao diện một trang.
+function readRoute(state = window.history.state) {
+  if (state?.view) return state;
+  const [view, tab] = window.location.hash.replace(/^#\/?/, '').split('/');
+  if (view === 'candidate') return { view, candidateTab: ['competitions', 'exams', 'results'].includes(tab) ? tab : 'competitions' };
+  return { view: ['account', 'manage', 'reports'].includes(view) ? view : 'home' };
+}
+
+function routeHash(view, candidateTab) {
+  return view === 'candidate' ? `#/candidate/${['competitions', 'exams', 'results'].includes(candidateTab) ? candidateTab : 'competitions'}` : `#/${view}`;
+}
+
 // Trang công khai dùng dữ liệu thật; dữ liệu tài khoản và đáp án nằm trong khu vực riêng.
 function Countdown({ competition, onEnter }) {
   const [now, setNow] = useState(Date.now());
@@ -39,17 +51,20 @@ function PublicHome({ refresh, site, units, onAuthenticated, showAuth, onEnter }
   return <>
     <section className="reference-hero" id="hero-section"><div className="reference-hero-grid"><div className="hero-media">{banner ? <img src={assetUrl(banner.url)} alt={banner.title || 'Banner cuộc thi'} /> : <div className="home-hero-copy"><p>TỈNH ĐOÀN</p><h1>{site?.title || 'Cổng thi trực tuyến'}</h1><p>{site?.description || 'Theo dõi lịch thi, tham gia làm bài và tra cứu kết quả.'}</p></div>}{banners.length > 1 && <div className="hero-dots">{banners.map((item, index) => <button key={item.url} aria-label={`Xem banner ${index + 1}`} aria-pressed={index === bannerIndex} className={index === bannerIndex ? 'active' : ''} onClick={() => setBannerIndex(index)} />)}</div>}</div><aside className="hero-side"><Countdown competition={data?.competition} onEnter={onEnter} />{showAuth ? <AuthPanel units={units} onAuthenticated={onAuthenticated} /> : <div className="landing-message logged-competition"><h3>{data?.competition?.name || 'Cuộc thi trực tuyến'}</h3></div>}</aside></div></section>
     <section className="content-section" id="lich-thi"><h2>Lịch trình cuộc thi</h2><ResourceState resource={dashboard}>{showCompetitionInformation ? data?.rounds?.length ? <ol className="timeline">{data.rounds.map((round, index) => <li key={round.id}><span className="round-number">{round.roundNumber || index + 1}</span><div><h3>{round.name || `Vòng thi ${round.roundNumber || index + 1}`}</h3><p>{formatDate(round.startAt)} → {formatDate(round.endAt)}</p></div></li>)}</ol> : <p className="empty-state">Chưa có lịch trình được công bố.</p> : <p className="empty-state">Không có cuộc thi đang diễn ra.</p>}</ResourceState></section>
-    {data?.roundCandidates?.type && <section className="content-section">{data.roundCandidates.type === 'ranking' ? <><h2>Bảng xếp hạng {data.roundCandidates.roundName || `vòng ${data.roundCandidates.roundNumber}`}</h2><p className="section-note">Kết quả chính thức của vòng cuối cuộc thi.</p>{data.roundCandidates.items.length ? <Table headings={['Hạng', 'Họ và tên', 'Đơn vị', 'Điểm', 'Thời gian']}><>{data.roundCandidates.items.map(item => <tr key={item.roundRank}><td>{item.roundRank}</td><td>{item.fullName}</td><td>{item.unitName || '—'}</td><td>{Number(item.score).toLocaleString('vi-VN')} / 100</td><td>{item.durationSeconds == null ? '—' : `${Math.floor(item.durationSeconds / 60)} phút ${item.durationSeconds % 60} giây`}</td></tr>)}</></Table> : <p className="empty-state">Chưa có kết quả hợp lệ để xếp hạng.</p>}</> : <><h2>{data.roundCandidates.type === 'advanced' ? `Danh sách thí sinh vượt qua ${data.roundCandidates.roundName || `vòng ${data.roundCandidates.roundNumber}`}` : `Danh sách thí sinh vòng ${data.roundCandidates.roundName || data.roundCandidates.roundNumber}`}</h2><p className="section-note">{data.roundCandidates.type === 'advanced' ? 'Danh sách Top N đã được hệ thống chốt.' : 'Danh sách thí sinh đã đăng ký cuộc thi.'}</p>{data.roundCandidates.items.length ? <Table headings={['STT', 'Họ và tên', 'Email', 'Số điện thoại', 'Đơn vị', 'Trực thuộc']}><>{data.roundCandidates.items.map((item, index) => <tr key={item.id}><td>{index + 1}</td><td>{item.fullName}</td><td>{item.email || '—'}</td><td>{item.phone || '—'}</td><td>{item.unitName || '—'}</td><td>{item.organizationName || '—'}</td></tr>)}</></Table> : <p className="empty-state">Chưa có thí sinh đủ điều kiện.</p>}</>}</section>}
+    {data?.roundCandidates?.type && <section className="content-section">{data.roundCandidates.type === 'ranking' ? <><h2>Bảng xếp hạng {data.roundCandidates.roundName || `vòng ${data.roundCandidates.roundNumber}`}</h2><p className="section-note">Kết quả chính thức của vòng cuối cuộc thi.</p>{data.roundCandidates.items.length ? <Table headings={['Hạng', 'Họ và tên', 'Đơn vị', 'Điểm', 'Thời gian']}><>{data.roundCandidates.items.map(item => <tr key={item.roundRank}><td>{item.roundRank}</td><td>{item.fullName}</td><td>{item.unitName || '—'}</td><td>{Number(item.score).toLocaleString('vi-VN')} {'\u0111i\u1ec3m'}</td><td>{item.durationSeconds == null ? '—' : `${Math.floor(item.durationSeconds / 60)} phút ${item.durationSeconds % 60} giây`}</td></tr>)}</></Table> : <p className="empty-state">Chưa có kết quả hợp lệ để xếp hạng.</p>}</> : <><h2>{data.roundCandidates.type === 'advanced' ? `Danh sách thí sinh vượt qua ${data.roundCandidates.roundName || `vòng ${data.roundCandidates.roundNumber}`}` : `Danh sách thí sinh ${data.roundCandidates.roundName || data.roundCandidates.roundNumber}`}</h2><p className="section-note">{data.roundCandidates.type === 'advanced' ? 'Danh sách Top N đã được hệ thống chốt.' : 'Danh sách thí sinh đã đăng ký cuộc thi.'}</p>{data.roundCandidates.items.length ? <Table headings={['STT', 'Họ và tên', 'Email', 'Số điện thoại', 'Đơn vị', 'Trực thuộc']}><>{data.roundCandidates.items.map((item, index) => <tr key={item.id}><td>{index + 1}</td><td>{item.fullName}</td><td>{item.email || '—'}</td><td>{item.phone || '—'}</td><td>{item.unitName || '—'}</td><td>{item.organizationName || '—'}</td></tr>)}</></Table> : <p className="empty-state">Chưa có thí sinh đủ điều kiện.</p>}</>}</section>}
     <section className="content-section"><h2>Thống kê cuộc thi</h2><ResourceState resource={dashboard}>{showCompetitionInformation ? <div className="stat-cards"><div><strong>{Number(data?.statistics?.totalRegistrations || 0).toLocaleString('vi-VN')}</strong><span>Số lượng đăng ký</span></div><div><strong>{Number(data?.statistics?.totalTests || 0).toLocaleString('vi-VN')}</strong><span>Số lượt thi</span></div></div> : <p className="empty-state">Không có cuộc thi đang diễn ra.</p>}</ResourceState></section>
-    <section className="content-section news-section" id="tin-tuc"><h2>Tin tức</h2>{news.length ? <div className="news-grid">{news.map((item, index) => <a className="news-card" href={assetUrl(item.url)} key={item.url} target="_blank" rel="noreferrer"><span>Tin {index + 1}</span><strong>{item.title}</strong><small>Xem tài liệu ↗</small></a>)}</div> : <p className="empty-state">Chưa có tin tức được công bố.</p>}</section>
+    <section className="content-section news-section" id="tin-tuc"><h2>Tin tức</h2>{news.length ? <div className="news-grid">{news.map((item, index) => <article className="news-card" key={item.url}><a className="news-preview" href={assetUrl(item.url)} target="_blank" rel="noreferrer"><span>{`Tin ${index + 1}`}</span><strong>{item.title}</strong><small>{'Xem tr\u1ef1c ti\u1ebfp \u2197'}</small></a><a className="news-download" href={assetUrl(`${item.url}?download=1`)} download>{'T\u1ea3i xu\u1ed1ng'}</a></article>)}</div> : <p className="empty-state">{'Ch\u01b0a c\u00f3 tin t\u1ee9c \u0111\u01b0\u1ee3c c\u00f4ng b\u1ed1.'}</p>}</section>
   </>;
 }
 
 export function App() {
   const session = useSession();
-  const [view, setView] = useState('home');
+  const initialRoute = readRoute();
+  const [view, setView] = useState(initialRoute.view);
   const [menuOpen, setMenuOpen] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  const [reportCompetitionId, setReportCompetitionId] = useState('');
+  const [candidateTab, setCandidateTab] = useState(initialRoute.candidateTab || 'competitions');
   const [notice, setNotice] = useState('');
   const site = useResource('/site', null, refresh);
   const units = useResource('/units', null, refresh);
@@ -57,21 +72,50 @@ export function App() {
   const user = session.user;
   const forced = Boolean(Number(user?.must_change_password));
   const allowedReports = user?.role === 'candidate' || user?.role === 'admin' || user?.permissions?.includes('reports');
-  const changePassword = async () => { await session.logout(); setNotice('Đã đổi mật khẩu. Vui lòng đăng nhập lại bằng mật khẩu mới.'); setView('account'); };
-  const authenticate = payload => { session.authenticate(payload); setNotice(''); setView(payload.user?.role === 'candidate' ? 'candidate' : 'manage'); };
-  const logout = async () => { await session.logout(); setView('account'); setNotice(''); };
+  const navigate = (nextView, options = {}) => {
+    const nextCandidateTab = options.candidateTab || candidateTab;
+    const nextReportCompetitionId = options.reportCompetitionId ?? reportCompetitionId;
+    setView(nextView);
+    if (nextView === 'candidate') setCandidateTab(nextCandidateTab);
+    if (options.reportCompetitionId != null) setReportCompetitionId(String(options.reportCompetitionId));
+    const nextState = { view: nextView, candidateTab: nextCandidateTab, reportCompetitionId: nextReportCompetitionId };
+    const hash = routeHash(nextView, nextCandidateTab);
+    if (window.location.hash !== hash) window.history.pushState(nextState, '', hash);
+  };
+  useEffect(() => {
+    // Khôi phục đúng màn hình và tab khi người dùng nhấn nút Quay lại hoặc Tiến tới.
+    const onPopState = event => {
+      const route = readRoute(event.state);
+      setView(route.view);
+      setCandidateTab(route.candidateTab || 'competitions');
+      setReportCompetitionId(route.reportCompetitionId || '');
+      setMenuOpen(false);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+  const changePassword = async () => { await session.logout(); setNotice('Đã đổi mật khẩu. Vui lòng đăng nhập lại bằng mật khẩu mới.'); navigate('account'); };
+  const authenticate = payload => {
+    session.authenticate(payload); setNotice('');
+    const isCandidate = payload.user?.role === 'candidate';
+    navigate(isCandidate ? 'candidate' : 'manage', { candidateTab: 'competitions' });
+    // Ch? React hi?n th? danh s?ch r?i cu?n m??t ?? th? sinh th?y c?c k? thi ngay sau ??ng nh?p.
+    if (isCandidate) setTimeout(() => document.querySelector('#candidate-competitions .exam-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+  const logout = async () => { await session.logout(); navigate('account'); setNotice(''); };
+  // Lịch thi nằm trên trang chủ; luôn chuyển trang trước rồi mới cuộn đến khu vực này.
+  const openSchedule = () => { navigate('home'); setMenuOpen(false); setTimeout(() => document.getElementById('lich-thi')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); };
   const selected = !user && !['home', 'account'].includes(view) ? 'account' : view;
   return <main>
-    <header className="site-header"><div className="container header-inner"><a className="site-brand" href="#trang-chu" onClick={() => { setView('home'); setMenuOpen(false); }}><span className="brand-mark" aria-hidden="true">✦</span>Thi trực tuyến</a><nav className={`site-nav${menuOpen ? ' is-open' : ''}`} aria-label="Điều hướng trang"><a href="#trang-chu" onClick={() => { setView('home'); setMenuOpen(false); }}>Trang chủ</a><a href="#lich-thi" onClick={() => setMenuOpen(false)}>Lịch thi</a><a href="#auth-panel" onClick={() => { setView('account'); setMenuOpen(false); }}>Đăng nhập</a></nav><span className="header-context">{user ? `${user.hoten} · ${roleNames[user.role] || 'Tài khoản'}` : ''}</span><button className="menu-toggle" aria-label="Mở menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>☰</button></div></header>
+    <header className="site-header"><div className="container header-inner"><a className="site-brand" href="#/home" onClick={event => { event.preventDefault(); navigate('home'); setMenuOpen(false); }}><span className="brand-mark" aria-hidden="true">✦</span>Thi trực tuyến</a><nav className={`site-nav${menuOpen ? ' is-open' : ''}`} aria-label="Điều hướng trang"><a href="#/home" onClick={event => { event.preventDefault(); navigate('home'); setMenuOpen(false); }}>Trang chủ</a>{user?.role === 'candidate' && !forced ? <button type="button" onClick={() => { navigate('candidate', { candidateTab: 'competitions' }); setMenuOpen(false); }}>Làm bài thi</button> : <a href="#lich-thi" onClick={event => { event.preventDefault(); openSchedule(); }}>Lịch thi</a>}{user && !forced && <>{user.role === 'candidate' ? <button type="button" onClick={() => { navigate('candidate', { candidateTab: 'results' }); setMenuOpen(false); }}>Kết quả</button> : <button type="button" onClick={() => { navigate('manage'); setMenuOpen(false); }}>Quản lý</button>}{allowedReports && <button type="button" onClick={() => { navigate('reports'); setMenuOpen(false); }}>Thống kê</button>}</>}{user ? <><button type="button" className="header-account" onClick={() => { navigate('account'); setMenuOpen(false); }}><strong>{user.hoten}</strong><span>{roleNames[user.role] || 'Tài khoản'}</span></button><button type="button" className="header-logout" disabled={session.loading} onClick={logout}>Đăng xuất</button></> : <a href="#/account" onClick={event => { event.preventDefault(); navigate('account'); setMenuOpen(false); }}>Đăng nhập</a>}</nav><button className="menu-toggle" aria-label="Mở menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(value => !value)}>☰</button></div></header>
     <div className="container page-content" id="trang-chu">
-      {user && <nav className="tab-nav primary-tabs" aria-label="Điều hướng tài khoản">{!forced && <>{user.role === 'candidate' ? <button className={selected === 'candidate' ? 'active' : ''} aria-pressed={selected === 'candidate'} onClick={() => setView('candidate')}>Làm bài, kết quả</button> : <button className={selected === 'manage' ? 'active' : ''} aria-pressed={selected === 'manage'} onClick={() => setView('manage')}>Quản lý</button>}{allowedReports && <button className={selected === 'reports' ? 'active' : ''} aria-pressed={selected === 'reports'} onClick={() => setView('reports')}>Thống kê</button>}</>}<button className={selected === 'account' ? 'active' : ''} aria-pressed={selected === 'account'} onClick={() => setView('account')}>Tài khoản</button><button className="logout-button" disabled={session.loading} onClick={logout}>Đăng xuất</button></nav>}
       <Notice text={notice} /><Notice text={session.error} error /><Notice text={site.error} error />
       {forced ? <PasswordForm token={session.token} required onChanged={changePassword} /> : <>
-        {selected === 'home' && <PublicHome refresh={refresh} site={data} units={units.data?.data || []} onAuthenticated={authenticate} showAuth={!user} onEnter={() => setView(user?.role === 'candidate' ? 'candidate' : user ? 'manage' : 'account')} />}
+        {selected === 'home' && <PublicHome refresh={refresh} site={data} units={units.data?.data || []} onAuthenticated={authenticate} showAuth={!user} onEnter={() => navigate(user?.role === 'candidate' ? 'candidate' : user ? 'manage' : 'account', { candidateTab: 'competitions' })} />}
         {selected === 'account' && <div id="auth-panel">{user ? <><section className="login-card"><h2>Thông tin tài khoản</h2><p><strong>{user.hoten}</strong> · {roleNames[user.role]}</p><p>{user.dienthoai} · {user.email}</p><p>Đơn vị: {user.donvi?.ten || user.unitName || units.data?.data?.find(unit => String(unit.id) === String(user.donviID))?.ten || 'Chưa chọn đơn vị'}</p></section><PasswordForm token={session.token} onChanged={changePassword} /></> : session.loading ? <p className="empty-state" role="status">Đang kiểm tra phiên đăng nhập…</p> : session.token ? <section className="login-card"><p>Chưa thể xác minh phiên đăng nhập.</p><div className="actions"><button onClick={session.retry}>Thử lại</button><button className="secondary" onClick={logout}>Đăng xuất trên thiết bị này</button></div></section> : <AuthPanel units={units.data?.data || []} unitsError={units.error} onAuthenticated={authenticate} />}</div>}
-        {user?.role === 'candidate' && <div hidden={selected !== 'candidate'}><CandidateWorkspace key={user.id} user={user} token={session.token} /></div>}
-        {user && user.role !== 'candidate' && selected === 'manage' && <ManageWorkspace key={user.id} user={user} token={session.token} units={units.data?.data || []} onSiteChanged={() => setRefresh(value => value + 1)} />}
-        {user && allowedReports && selected === 'reports' && <Reports token={session.token} role={user.role} />}
+        {user?.role === 'candidate' && <div hidden={selected !== 'candidate'}><CandidateWorkspace key={user.id} user={user} token={session.token} units={units.data?.data || []} initialTab={candidateTab} /></div>}
+        {user && user.role !== 'candidate' && selected === 'manage' && <ManageWorkspace key={user.id} user={user} token={session.token} units={units.data?.data || []} onSiteChanged={() => setRefresh(value => value + 1)} onOpenReports={competitionId => navigate('reports', { reportCompetitionId: competitionId })} />}
+        {user && allowedReports && selected === 'reports' && <Reports token={session.token} role={user.role} initialCompetitionId={reportCompetitionId} />}
       </>}
     </div><footer><div className="container"><strong>Tỉnh Đoàn Vĩnh Long</strong><p>Cổng thông tin thi trực tuyến · © {new Date().getFullYear()}</p></div></footer>
   </main>;

@@ -5,7 +5,7 @@ import { api } from './api';
 // Chuyển mã dữ liệu backend thành nhãn tiếng Việt, không dùng để quyết định quyền nghiệp vụ.
 export const formatDate = value => value ? new Date(value).toLocaleString('vi-VN') : 'Chưa công bố';
 export const roleNames = { candidate: 'Thí sinh', teacher: 'Giảng viên', admin: 'Quản trị viên' };
-export const statusNames = { draft: 'Bản nháp', published: 'Đã công bố', unscheduled: 'Chưa có lịch', upcoming: 'Sắp diễn ra', active: 'Đang diễn ra', ongoing: 'Đang diễn ra', ended: 'Đã kết thúc', closed: 'Đã kết thúc', in_progress: 'Đang làm bài', submitted: 'Đã nộp', expired: 'Hết giờ' };
+export const statusNames = { draft: 'Bản nháp', published: 'Thông báo kỳ thi', paused: 'Tạm đóng', unscheduled: 'Chưa có lịch', upcoming: 'Sắp diễn ra', active: 'Đang diễn ra', ongoing: 'Đang diễn ra', ended: 'Đã kết thúc', closed: 'Đã kết thúc', in_progress: 'Đang làm bài', submitted: 'Đã nộp', expired: 'Hết giờ' };
 export const queryString = filters => new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== '' && value != null)).toString();
 
 // Hủy lần tải cũ khi đổi bộ lọc để dữ liệu chậm không ghi đè kết quả mới.
@@ -43,8 +43,13 @@ export function Notice({ text, error = false, clear }) {
 export function Table({ headings, children, label = 'Bảng dữ liệu' }) { return <div className="table-wrap" role="region" aria-label={label} tabIndex={0}><table><thead><tr>{headings.map(heading => <th scope="col" key={heading}>{heading}</th>)}</tr></thead><tbody>{children}</tbody></table></div>; }
 export function CompetitionSelect({ items, value, onChange, required = false, all = 'Tất cả kỳ thi' }) { return <label>Kỳ thi<select value={value} onChange={event => onChange(event.target.value)} required={required}><option value="">{required ? 'Chọn kỳ thi' : all}</option>{items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>; }
 export function DateFilters({ value, onChange }) { return <><label>Từ ngày<input type="date" value={value.from || ''} onChange={event => onChange({ ...value, from: event.target.value })} /></label><label>Đến ngày<input type="date" value={value.to || ''} min={value.from || undefined} onChange={event => onChange({ ...value, to: event.target.value })} /></label></>; }
-// Tính số trang từ phân trang do backend trả về, không tự cắt dữ liệu ở frontend.
-export function Pagination({ data, page, onChange }) { const pages = Math.max(1, Math.ceil(Number(data?.total || 0) / Number(data?.pageSize || 100))); return data?.total != null ? <div className="pagination"><span>{data.total} bản ghi · Trang {page}/{pages}</span><button className="secondary" disabled={page <= 1} onClick={() => onChange(page - 1)}>Trang trước</button><button className="secondary" disabled={page >= pages} onClick={() => onChange(page + 1)}>Trang sau</button></div> : null; }
+// Dùng được cho phân trang do backend trả về hoặc danh sách đã tải ở frontend.
+export function Pagination({ data, page, onChange, total, pageSize }) {
+  const itemTotal = total ?? data?.total;
+  const itemPageSize = Number(pageSize ?? data?.pageSize ?? 100);
+  const pages = Math.max(1, Math.ceil(Number(itemTotal || 0) / itemPageSize));
+  return itemTotal != null ? <div className="pagination"><span>{itemTotal} bản ghi · Trang {page}/{pages}</span><button type="button" className="secondary" disabled={page <= 1} onClick={() => onChange(page - 1)}>Trang trước</button><button type="button" className="secondary" disabled={page >= pages} onClick={() => onChange(page + 1)}>Trang sau</button></div> : null;
+}
 
 // Dùng chung trạng thái thao tác; lỗi API luôn được hiển thị bên cạnh biểu mẫu.
 export function useAction() {
