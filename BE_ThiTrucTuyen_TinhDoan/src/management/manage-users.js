@@ -34,6 +34,72 @@ async function assignCompetitions(db, userId, ids) {
 export function createUserManagementRouter({ pool }) {
   // API quản lý đơn vị, cấp tài khoản, phân quyền và hỗ trợ đặt lại mật khẩu.
   const router = Router();
+  // Ch? gi? m?t t?c v? nh?p t?i kho?n trong b? nh? ?? tr?nh nhi?u l? bcrypt c?ng chi?m CPU.
+  let candidateImportJob = null;
+  const yieldToRequests = () => new Promise(resolve => setImmediate(resolve));
+
+  async function processCandidateImport(job) {
+    job.status = 'running';
+    job.startedAt = new Date().toISOString();
+    try {
+      const [unitRows] = await pool.query('SELECT id,ten FROM donvi');
+      const unitByName = new Map(unitRows.map(item => [String(item.ten).trim().toLocaleLowerCase('vi'), item]));
+      const [existingRows] = await pool.query('SELECT dienthoai,email FROM users');
+      const usedPhones = new Set(existingRows.map(item => String(item.dienthoai || '')));
+      const usedEmails = new Set(existingRows.map(item => String(item.email || '').trim().toLocaleLowerCase('vi')));
+      const importedPhones = new Set(), importedEmails = new Set();
+      const batchSize = 10;
+      for (let offset = 0; offset < job.rows.length; offset += batchSize) {
+        const batch = job.rows.slice(offset, offset + batchSize);
+        for (const row of batch) {
+          const phone = String(row.dienthoai || '').replace(/[\s.-]/g, '');
+          const email = String(row.email || '').trim().toLocaleLowerCase('vi');
+          const errors = [];
+          if (!row.hoten || row.hoten.length > 255) errors.push('Họ và tên không hợp lệ');
+          if (!/^\+?\d{9,15}$/.test(phone)) errors.push('Số điện thoại không hợp lệ');
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errors.push('Email không hợp lệ');
+          if (usedPhones.has(phone) || importedPhones.has(phone)) errors.push('Số điện thoại đã được đăng ký');
+          if (usedEmails.has(email) || importedEmails.has(email)) errors.push('Email đã được đăng ký');
+          const unit = unitByName.get(String(row.unitName || '').trim().toLocaleLowerCase('vi'));
+          if (!unit) errors.push('Đơn vị chưa có trong hệ thống');
+          const chucVu = row.chucVu?.trim() || 'Đoàn viên';
+          if (chucVu.length > 100) errors.push('Chức vụ không quá 100 ký tự');
+          if (errors.length) job.skipped.push({ row: row.row, errors });
+          else {
+            const password = candidateInitialPassword(email, phone);
+            // Mã hóa ngoài transaction để không giữ khóa database trong thời gian bcrypt chạy.
+            const hash = await bcrypt.hash(password, 12);
+            try {
+              await pool.transaction(async tx => {
+                const [created] = await tx.query("INSERT INTO users (hoten,dienthoai,email,chuc_vu,donviID,password,is_active,role,permissions,must_change_password) VALUES (?,?,?,?,?,?,1,'candidate','[]',1)", [row.hoten.trim(), phone, email, chucVu, unit.id, hash]);
+                await audit(tx, job.actorId, 'candidate.bulk_import', 'user', created.insertId);
+              });
+              usedPhones.add(phone); usedEmails.add(email); importedPhones.add(phone); importedEmails.add(email);
+              job.credentials.push({ hoten: row.hoten.trim(), chucVu, unitName: unit.ten, dienthoai: phone, email, password });
+              job.added += 1;
+            } catch (error) {
+              if (error?.code === 'ER_DUP_ENTRY') job.skipped.push({ row: row.row, errors: ['Số điện thoại hoặc email đã được đăng ký'] });
+              else throw error;
+            }
+          }
+          job.processed += 1;
+          job.updatedAt = new Date().toISOString();
+        }
+        // Nhường event loop sau mỗi lô để các API thi và đăng nhập vẫn được phục vụ.
+        await yieldToRequests();
+      }
+      job.status = 'completed';
+    } catch (error) {
+      job.status = 'failed';
+      job.error = 'Không thể hoàn tất nhập tài khoản. Vui lòng kiểm tra log máy chủ.';
+      console.error('Candidate bulk import:', error.code || error.name);
+    } finally {
+      job.finishedAt = new Date().toISOString();
+      job.updatedAt = job.finishedAt;
+    }
+  }
+
+
   router.get('/units', route(async (req, res) => {
     // API công khai vẫn trả toàn bộ đơn vị cho biểu mẫu đăng ký; giao diện quản trị truyền page để nhận từng trang.
     const paginating = Object.hasOwn(req.query, 'page') || Object.hasOwn(req.query, 'pageSize');
@@ -55,38 +121,17 @@ export function createUserManagementRouter({ pool }) {
     await sendWorkbook(res, workbook, 'mau-tai-khoan-thi-sinh.xlsx');
   }));
   router.post('/users/candidates/import', upload.single('file'), route(async (req, res) => {
+    if (candidateImportJob && ['pending', 'running'].includes(candidateImportJob.status)) throw fail(409, '?ang c? m?t t?c v? nh?p t?i kho?n th? sinh. Vui l?ng ch? t?c v? n?y ho?n t?t.', 'IMPORT_IN_PROGRESS');
     const rows = await readCandidateAccountWorkbook(req.file);
-    const result = await pool.transaction(async tx => {
-      const units = await tx.query('SELECT id,ten FROM donvi');
-      const unitByName = new Map(units[0].map(item => [String(item.ten).trim().toLocaleLowerCase('vi'), item]));
-      const phones = [...new Set(rows.map(item => String(item.dienthoai).replace(/[\s.-]/g, '')).filter(Boolean))];
-      const emails = [...new Set(rows.map(item => String(item.email).trim().toLowerCase()).filter(Boolean))];
-      const existing = phones.length || emails.length ? await tx.query(`SELECT dienthoai,email FROM users WHERE ${phones.length ? `dienthoai IN (${phones.map(() => '?').join(',')})` : '0'} OR ${emails.length ? `email IN (${emails.map(() => '?').join(',')})` : '0'}`, [...phones, ...emails]) : [[]];
-      const usedPhones = new Set(existing[0].map(item => String(item.dienthoai || ''))), usedEmails = new Set(existing[0].map(item => String(item.email || '').toLowerCase()));
-      const importedPhones = new Set(), importedEmails = new Set(), credentials = [], skipped = [];
-      for (const row of rows) {
-        const phone = String(row.dienthoai).replace(/[\s.-]/g, ''), email = String(row.email).trim().toLowerCase();
-        const errors = [];
-        if (!row.hoten || row.hoten.length > 255) errors.push('Họ và tên không hợp lệ');
-        if (!/^\+?\d{9,15}$/.test(phone)) errors.push('Số điện thoại không hợp lệ');
-        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errors.push('Email không hợp lệ');
-        if (usedPhones.has(phone) || importedPhones.has(phone)) errors.push('Số điện thoại đã được đăng ký');
-        if (usedEmails.has(email) || importedEmails.has(email)) errors.push('Email đã được đăng ký');
-        const unit = unitByName.get(String(row.unitName).trim().toLocaleLowerCase('vi'));
-        if (!unit) errors.push('Đơn vị chưa có trong hệ thống');
-        if (errors.length) { skipped.push({ row: row.row, errors }); continue; }
-        const password = candidateInitialPassword(email, phone);
-        const hash = await bcrypt.hash(password, 12);
-        const chucVu = row.chucVu?.trim() || 'Đoàn viên';
-        if (chucVu.length > 100) { skipped.push({ row: row.row, errors: ['Chức vụ không quá 100 ký tự'] }); continue; }
-        const [created] = await tx.query("INSERT INTO users (hoten,dienthoai,email,chuc_vu,donviID,password,is_active,role,permissions,must_change_password) VALUES (?,?,?,?,?,?,1,'candidate','[]',1)", [row.hoten.trim(), phone, email, chucVu, unit.id, hash]);
-        await audit(tx, req.user.id, 'candidate.bulk_import', 'user', created.insertId);
-        usedPhones.add(phone); usedEmails.add(email); importedPhones.add(phone); importedEmails.add(email);
-        credentials.push({ hoten: row.hoten.trim(), chucVu, unitName: unit.ten, dienthoai: phone, email, password });
-      }
-      return { added: credentials.length, skipped, credentials };
-    });
-    res.status(201).json({ success: true, ...result, message: `Đã tạo ${result.added} tài khoản thí sinh.` });
+    candidateImportJob = { id: randomBytes(12).toString('hex'), actorId: req.user.id, rows, total: rows.length, processed: 0, added: 0, skipped: [], credentials: [], status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), error: null };
+    const job = candidateImportJob;
+    setImmediate(() => { processCandidateImport(job); });
+    res.status(202).json({ success: true, job: { id: job.id, status: job.status, total: job.total, processed: job.processed, added: job.added, skipped: job.skipped } });
+  }));
+  router.get('/users/candidates/import/status', route(async (req, res) => {
+    if (!candidateImportJob) return res.json({ success: true, job: null });
+    const job = candidateImportJob;
+    res.json({ success: true, job: { id: job.id, status: job.status, total: job.total, processed: job.processed, added: job.added, skipped: job.skipped, credentials: job.status === 'completed' ? job.credentials : [], error: job.error, createdAt: job.createdAt, updatedAt: job.updatedAt, finishedAt: job.finishedAt || null } });
   }));
   router.get('/users/candidates/export', route(async (_req, res) => {
     // Chỉ xuất tài khoản được tạo từ tệp Excel, không lẫn tài khoản tự đăng ký hoặc cấp thủ công.
