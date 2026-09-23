@@ -75,7 +75,7 @@ export function createUserManagementRouter({ pool }) {
                 await audit(tx, job.actorId, 'candidate.bulk_import', 'user', created.insertId);
               });
               usedPhones.add(phone); usedEmails.add(email); importedPhones.add(phone); importedEmails.add(email);
-              job.credentials.push({ hoten: row.hoten.trim(), chucVu, unitName: unit.ten, dienthoai: phone, email, password });
+              job.credentials.push({ row: row.row, hoten: row.hoten.trim(), chucVu, unitName: unit.ten, dienthoai: phone, email, password });
               job.added += 1;
             } catch (error) {
               if (error?.code === 'ER_DUP_ENTRY') job.skipped.push({ row: row.row, errors: ['Số điện thoại hoặc email đã được đăng ký'] });
@@ -134,15 +134,22 @@ export function createUserManagementRouter({ pool }) {
     res.json({ success: true, job: { id: job.id, status: job.status, total: job.total, processed: job.processed, added: job.added, skipped: job.skipped, credentials: job.status === 'completed' ? job.credentials : [], error: job.error, createdAt: job.createdAt, updatedAt: job.updatedAt, finishedAt: job.finishedAt || null } });
   }));
   router.get('/users/candidates/export', route(async (_req, res) => {
-    // Chỉ xuất tài khoản được tạo từ tệp Excel, không lẫn tài khoản tự đăng ký hoặc cấp thủ công.
-    const [items] = await pool.query("SELECT u.hoten,u.chuc_vu AS chucVu,d.ten AS unitName,u.dienthoai,u.email FROM users u LEFT JOIN donvi d ON d.id=u.donviID WHERE u.role='candidate' AND EXISTS (SELECT 1 FROM audit_logs a WHERE a.target_type='user' AND a.target_id=CAST(u.id AS CHAR) AND a.action='candidate.bulk_import') ORDER BY u.hoten,u.id");
+    // T?p xu?t ch? ??i di?n cho l?n nh?p Excel g?n nh?t, gi? nguy?n th? t? d?ng g?c.
+    const job = candidateImportJob;
+    if (!job || job.status !== 'completed') throw fail(409, 'H?y ch? t?c v? nh?p t?i kho?n ho?n t?t tr??c khi xu?t danh s?ch.', 'IMPORT_NOT_COMPLETED');
+    const credentialsByRow = new Map(job.credentials.map(item => [Number(item.row), item]));
     const workbook = new ExcelJS.Workbook();
     const sheet = styledSheet(workbook, 'Danh sach thi sinh', [
       ...CANDIDATE_ACCOUNT_HEADERS.map((header, index) => ({ header, key: ['sequence', 'hoten', 'chucVu', 'unitName', 'dienthoai', 'email'][index], width: index === 1 ? 32 : 24 })),
-      { header: 'Mật khẩu', key: 'password', width: 28 }
+      { header: 'M\u1eadt kh\u1ea9u', key: 'password', width: 38 }
     ]);
-    // File thể hiện mật khẩu khởi tạo theo quy ước; người dùng có thể đã đổi mật khẩu sau lần đăng nhập đầu tiên.
-    sheet.addRows(items.map((item, index) => ({ ...item, sequence: index + 1, chucVu: item.chucVu || 'Đoàn viên', password: candidateInitialPassword(item.email, item.dienthoai) })));
+    sheet.addRows(job.rows.map(row => {
+      const created = credentialsByRow.get(Number(row.row));
+      return {
+        sequence: row.sequence || row.row - 1, hoten: row.hoten, chucVu: row.chucVu || '\u0110o\u00e0n vi\u00ean', unitName: row.unitName, dienthoai: row.dienthoai, email: row.email,
+        password: created ? created.password : 'email ho\u1eb7c s\u1ed1 đi\u1ec7n tho\u1ea1i tr\u00f9ng, kh\u00f4ng th\u1ec3 t\u1ea1o'
+      };
+    }));
     await sendWorkbook(res, workbook, 'danh-sach-tai-khoan-thi-sinh-nhap-excel.xlsx');
   }));
   router.post('/units', route(async (req, res) => {

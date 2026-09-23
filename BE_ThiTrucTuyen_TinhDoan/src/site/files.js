@@ -5,6 +5,8 @@ import { fail } from '../common/http.js';
 
 // Giới hạn trước khi đọc vào bộ nhớ; chỉ gắn middleware tại các API đã xác thực quyền tải lên.
 export const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 5, parts: 7, fieldSize: 2048 } });
+// T?p tin t?c c? th? l?n h?n b?ng t?nh nh?p li?u, nh?ng v?n gi?i h?n ?? tr?nh chi?m b? nh? m?y ch?.
+export const assetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 5, parts: 7, fieldSize: 2048 } });
 // Tiêu đề mẫu dùng tiếng Việt; STT chỉ để dễ đối chiếu và không được lưu vào dữ liệu nghiệp vụ.
 export const QUESTION_HEADERS = ['STT', '\u004e\u1ed9i dung c\u00e2u h\u1ecfi', '\u0110\u00e1p \u00e1n A', '\u0110\u00e1p \u00e1n B', '\u0110\u00e1p \u00e1n C', '\u0110\u00e1p \u00e1n D', '\u0110\u00e1p \u00e1n \u0111\u00fang', '\u0110\u1ed9 kh\u00f3', 'S\u1ed1 \u0111i\u1ec3m'];
 export const UNIT_HEADERS = ['STT', '\u0110\u01a1n v\u1ecb'];
@@ -125,7 +127,8 @@ export async function readCandidateAccountWorkbook(file) {
     const cells = [2, 3, 4, 5, 6].map(column => cellText(sheet.getRow(row).getCell(column)));
     if (cells.every(value => !value)) continue;
     const [hoten, chucVu, unitName, dienthoai, email] = cells;
-    items.push({ row, hoten, chucVu, unitName, dienthoai, email });
+    // Giữ STT gốc để tệp kết quả đối chiếu đúng thứ tự người quản trị đã nhập.
+    items.push({ row, sequence: cellText(sheet.getRow(row).getCell(1)), hoten, chucVu, unitName, dienthoai, email });
   }
   if (!items.length) throw fail(400, 'Tệp chưa có tài khoản thí sinh.');
   return items;

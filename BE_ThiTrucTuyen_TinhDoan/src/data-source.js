@@ -34,6 +34,7 @@ import { RemoveUserSortBy1790500000000 } from './migrations/1790500000000-Remove
 import { RoundDurationSeconds1790600000000 } from './migrations/1790600000000-RoundDurationSeconds.js';
 import { AuditLogDetails1790700000000 } from './migrations/1790700000000-AuditLogDetails.js';
 import { UserPosition1790800000000 } from './migrations/1790800000000-UserPosition.js';
+import { FooterContent1790900000000 } from './migrations/1790900000000-FooterContent.js';
 import AuthSession from './entities/AuthSession.js';
 import PasswordResetRequest from './entities/PasswordResetRequest.js';
 import TeacherCompetition from './entities/TeacherCompetition.js';
@@ -52,7 +53,7 @@ export const dataSource = new DataSource({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'tinhdoan_thitructuyen',
   entities: [DoanCoSo, DonVi, User, Question, Exam, ExamQuestion, Competition, Round, UserExamSession, Result, Statistics, Rank, PasswordResetTemp, OtpVerification, AuthSession, PasswordResetRequest, TeacherCompetition, CompetitionRegistration, SiteSetting, SiteAsset, AuditLog],
-  migrations: [InitialSchema1788912000000, ExamPlatform1789000000000, CompetitionPause1789100000000, RoundProgression1789400000000, HomeContent1789500000000, PinnedCompetition1789600000000, QuestionRoundScope1789800000000, CompetitionPassingScore1789900000000, RemoveBonusPrediction1790000000000, RemoveQuestionTopic1790100000000, QuestionPoints1790200000000, RemovePassingScores1790300000000, WidenExamScores1790400000000, RemoveUserSortBy1790500000000, RoundDurationSeconds1790600000000, AuditLogDetails1790700000000, UserPosition1790800000000],
+  migrations: [InitialSchema1788912000000, ExamPlatform1789000000000, CompetitionPause1789100000000, RoundProgression1789400000000, HomeContent1789500000000, PinnedCompetition1789600000000, QuestionRoundScope1789800000000, CompetitionPassingScore1789900000000, RemoveBonusPrediction1790000000000, RemoveQuestionTopic1790100000000, QuestionPoints1790200000000, RemovePassingScores1790300000000, WidenExamScores1790400000000, RemoveUserSortBy1790500000000, RoundDurationSeconds1790600000000, AuditLogDetails1790700000000, UserPosition1790800000000, FooterContent1790900000000],
   migrationsTableName: 'schema_migrations',
   // MySQL tự xác nhận các lệnh DDL nên không bọc toàn bộ migration trong giao dịch.
   migrationsTransactionMode: 'none',
