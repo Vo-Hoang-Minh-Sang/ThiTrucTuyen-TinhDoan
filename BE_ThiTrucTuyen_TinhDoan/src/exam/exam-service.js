@@ -118,7 +118,7 @@ async function payloadFor(tx, session, now) {
 
 async function competitionPaused(tx, competitionId) {
   // Kiểm tra trong chính giao dịch để không ghi đáp án hoặc chấm bài sau thời điểm tạm đóng.
-  const [[competition]] = await tx.query('SELECT status FROM competitions WHERE id=? FOR SHARE', [competitionId]);
+  const [[competition]] = await tx.query('SELECT status FROM competitions WHERE id=? LOCK IN SHARE MODE', [competitionId]);
   return competition?.status === 'paused';
 }
 
@@ -221,14 +221,14 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
       // Đăng ký là bước riêng, không tự phát sinh khi thí sinh bấm bắt đầu làm bài.
       return pool.transaction(async tx => {
         const user = await lockUser(tx, userId);
-        const [[competition]] = await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
+        const [[competition]] = await tx.query('SELECT * FROM competitions WHERE id = ? LOCK IN SHARE MODE', [competitionId]);
         const now = await serverTime(tx);
         if (competition?.status === 'paused') throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         if (!competition || competition.status !== 'published') throw examError(404, 'Không tìm thấy kỳ thi đã xuất bản.', 'NOT_FOUND');
         if (date(competition.end_at) && now >= date(competition.end_at)) throw examError(409, 'Kỳ thi đã kết thúc đăng ký.', 'REGISTRATION_CLOSED');
         // Đăng ký chỉ mở đến khi vòng đầu tiên kết thúc; không dùng vòng đang chọn trên giao diện.
         const [[firstRound]] = await tx.query(`SELECT end_datetime FROM rounds
-          WHERE competition_id=? AND enabled=1 ORDER BY round_number,id LIMIT 1 FOR SHARE`, [competitionId]);
+          WHERE competition_id=? AND enabled=1 ORDER BY round_number,id LIMIT 1 LOCK IN SHARE MODE`, [competitionId]);
         if (firstRound?.end_datetime && now >= date(firstRound.end_datetime)) {
           throw examError(409, 'Đã hết thời gian đăng ký vì vòng thi thứ nhất đã kết thúc.', 'REGISTRATION_CLOSED');
         }
@@ -244,7 +244,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         const [[registration]] = await tx.query(`SELECT registered_at FROM competition_registrations
           WHERE user_id = ? AND competition_id = ?`, [userId, competitionId]);
         if (!registration) throw examError(403, 'Bạn cần đăng ký cuộc thi này trước khi làm bài.', 'REGISTRATION_REQUIRED');
-        const [[initialCompetition]] = await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
+        const [[initialCompetition]] = await tx.query('SELECT * FROM competitions WHERE id = ? LOCK IN SHARE MODE', [competitionId]);
         if (initialCompetition?.status === 'paused') throw examError(423, 'Cuộc thi đang bị tạm dừng.', 'COMPETITION_PAUSED');
         const [rounds] = await tx.query('SELECT * FROM rounds WHERE competition_id=? AND enabled=1 ORDER BY round_number,id', [competitionId]);
         const clock = await serverTime(tx);
@@ -263,7 +263,7 @@ export function createCandidateService({ pool, randomIndex = randomInt }) {
         }
         try {
           // Khóa chia sẻ cho phép nhiều thí sinh bắt đầu cùng lúc nhưng chặn đổi lịch hoặc thêm đề chen ngang.
-          const [[competition]] = await tx.query('SELECT * FROM competitions WHERE id = ? FOR SHARE', [competitionId]);
+          const [[competition]] = await tx.query('SELECT * FROM competitions WHERE id = ? LOCK IN SHARE MODE', [competitionId]);
           if (!competition || competition.status !== 'published') throw examError(404, 'Không tìm thấy kỳ thi đã xuất bản.', 'NOT_FOUND');
           const start = round ? new Date(Math.max(date(round.start_datetime)?.getTime() || 0, date(competition.start_at)?.getTime() || 0)) : date(competition.start_at);
           const end = round ? new Date(Math.min(date(round.end_datetime)?.getTime() || 0, date(competition.end_at)?.getTime() || 0)) : date(competition.end_at);
