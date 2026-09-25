@@ -60,7 +60,7 @@ export function validateAnswers(value, questions) {
 
 // Mỗi câu có trọng số như nhau; câu bỏ trống hoặc trả lời sai được tính 0 điểm.
 export function gradeAnswers(questions, answers) {
-  // ?i?m b?i thi l? t?ng ?i?m c?a c?c c?u tr? l?i ??ng, kh?ng quy ??i v? thang 100.
+  // Không đọc lại ngân hàng câu hỏi; chỉ chấm theo ảnh chụp đề đã cấp cho thí sinh.
   const score = questions.reduce((total, question) => total + (answers[String(question.id)] === question.correctAnswer ? Number(question.points ?? 1) : 0), 0);
   return Math.round(score * 100) / 100;
 }
