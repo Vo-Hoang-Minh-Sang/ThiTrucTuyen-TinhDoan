@@ -4,6 +4,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { createRateLimiter, validateAuthConfiguration } from './security.js';
 import { createAccess, publicUser, USER_FIELDS } from './access.js';
+import { audit } from '../common/http.js';
 
 export { validateAuthConfiguration } from './security.js';
 
@@ -31,6 +32,28 @@ function parseIdentifier(value) {
 }
 
 // Nhận kết nối dữ liệu và hàm gửi email từ bên ngoài để có thể thay thế khi kiểm thử.
+
+// Che bot dinh danh trong nhat ky, du de truy vet nhung khong ghi toan bo email hoac so dien thoai.
+function maskedIdentifier(identifier) {
+  if (!identifier) return null;
+  if (identifier.email) {
+    const [local, domain] = identifier.email.split('@');
+    return `${local.slice(0, 2)}***@${domain}`;
+  }
+  return `***${identifier.phone.slice(-4)}`;
+}
+
+// Ghi nhat ky dang nhap an toan; loi ghi log khong duoc lam gian doan dang nhap.
+async function recordLogin(pool, request, identifier, outcome, actorId = null) {
+  const details = { outcome, identifier: maskedIdentifier(identifier), ip: request.ip || 'unknown' };
+  try {
+    await audit(pool, actorId, outcome === 'success' ? 'auth.login.success' : 'auth.login.failed', 'auth', actorId, details);
+  } catch (error) {
+    console.error('[AUTH LOGIN LOG FAILED]', error.code || error.name);
+  }
+  if (outcome !== 'success') console.warn('[AUTH LOGIN FAILED]', JSON.stringify(details));
+}
+
 export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limiter = createRateLimiter() }) {
   const config = validateAuthConfiguration(env);
   const router = express.Router();
@@ -49,8 +72,33 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
 
   // Áp dụng đồng thời giới hạn theo IP và định danh; báo thời gian chờ qua Retry-After.
   function throttle(request, response, scope, identifier, accountLimit, windowMs) {
-    const attempts = [limiter.consume(`${scope}:ip`, request.ip || 'unknown', scope === 'issue' ? 20 : 40, windowMs)];
-    if (identifier) attempts.push(limiter.consume(`${scope}:account`, identifier, accountLimit, windowMs));
+    // Gioi han theo tai khoan/dia chi email, khong dung IP chung cua mang truong hoc.
+    const attempts = identifier ? [limiter.consume(`${scope}:account`, identifier, accountLimit, windowMs)] : [];
+    const blocked = attempts.find(attempt => !attempt.allowed);
+    if (!blocked) return false;
+    if (scope === 'login') {
+      const loginIdentifier = identifier ? (identifier.includes('@') ? { email: identifier, phone: null } : { email: null, phone: identifier }) : null;
+      void recordLogin(pool, request, loginIdentifier, 'rate_limited');
+    }
+    response.set('Retry-After', String(blocked.retryAfter));
+    failure(response, 429, 'RATE_LIMITED', 'Bạn đã thử quá nhiều lần. Vui lòng thử lại sau.', { retryAfter: blocked.retryAfter });
+    return true;
+  }
+
+  // Chỉ tăng bộ đếm sau một lần đăng nhập thất bại; đăng nhập đúng không bị xem là thử sai.
+  function loginBlocked(request, response, identifier) {
+    const attempts = identifier ? [limiter.peek('login:account', identifier, 5)] : [];
+    const blocked = attempts.find(attempt => !attempt.allowed);
+    if (!blocked) return false;
+    response.set('Retry-After', String(blocked.retryAfter));
+    failure(response, 429, 'RATE_LIMITED', 'Bạn đã thử quá nhiều lần. Vui lòng thử lại sau.', { retryAfter: blocked.retryAfter });
+    return true;
+  }
+
+  function registerLoginFailure(request, response, identifier) {
+    // Kh?a ??ng nh?p theo c?c l?n sai trong 5 ph?t ?? gi?m ?nh h??ng ??n th? sinh nh?p nh?m.
+    const windowMs = 5 * 60 * 1000;
+    const attempts = identifier ? [limiter.consume('login:account', identifier, 5, windowMs)] : [];
     const blocked = attempts.find(attempt => !attempt.allowed);
     if (!blocked) return false;
     response.set('Retry-After', String(blocked.retryAfter));
@@ -220,8 +268,18 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
   router.post('/login', route(async (request, response) => {
     const identifier = parseIdentifier(request.body.identifier);
     const password = request.body.password;
-    if (!identifier || typeof password !== 'string' || !password || Buffer.byteLength(password) > 72) return failure(response, 400, 'VALIDATION_ERROR', 'Vui lòng nhập email/số điện thoại và mật khẩu hợp lệ.');
-    if (throttle(request, response, 'login', identifier.key, 5, 15 * 60 * 1000)) return;
+    if (loginBlocked(request, response, identifier?.key)) {
+      void recordLogin(pool, request, identifier, 'rate_limited');
+      return;
+    }
+    if (!identifier || typeof password !== 'string' || !password || Buffer.byteLength(password) > 72) {
+      if (registerLoginFailure(request, response, identifier?.key)) {
+        void recordLogin(pool, request, identifier, 'rate_limited');
+        return;
+      }
+      void recordLogin(pool, request, identifier, 'invalid_input');
+      return failure(response, 400, 'VALIDATION_ERROR', 'Vui lòng nhập email/số điện thoại và mật khẩu hợp lệ.');
+    }
     // Khóa tài khoản khi cấp phiên để việc đổi mật khẩu không tạo JWT từ mật khẩu cũ.
     const session = await pool.transaction(async tx => {
       const user = await findUser(tx, identifier, true);
@@ -237,7 +295,16 @@ export function createAuthRouter({ pool, sendOtpEmail, env = process.env, limite
       await tx.query('UPDATE users SET countLogin = countLogin + 1 WHERE id = ?', [user.id]);
       return { token, user: publicUser(user) };
     });
-    if (!session) return failure(response, 401, 'INVALID_CREDENTIALS', 'Thông tin đăng nhập không đúng hoặc tài khoản đã bị khóa.');
+    if (!session) {
+      if (registerLoginFailure(request, response, identifier.key)) {
+        void recordLogin(pool, request, identifier, 'rate_limited');
+        return;
+      }
+      void recordLogin(pool, request, identifier, 'invalid_credentials');
+      return failure(response, 401, 'INVALID_CREDENTIALS', 'Thông tin đăng nhập không đúng hoặc tài khoản đã bị khóa.');
+    }
+    limiter.reset('login:account', identifier.key);
+    void recordLogin(pool, request, identifier, 'success', session.user.id);
     return response.json({ success: true, ...session });
   }));
 

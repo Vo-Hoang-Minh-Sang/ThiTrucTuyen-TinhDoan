@@ -5,21 +5,75 @@ import { closeDatabase, initializeDatabase, pool } from './db.js';
 import { sendOtpEmail } from './auth/mailer.js';
 import { finalizeExpiredSessions } from './exam/exam-service.js';
 import { finalizeEndedRounds } from './exam/rounds.js';
-import { createDatabaseBackup } from './common/database-backup.js';
+import { createDatabaseBackup, databaseBackupAvailable } from './common/database-backup.js';
 
 dotenv.config();
 let server;
 let expiryTimer;
 let expiryRun;
+const FINALIZATION_BATCH_SIZE = 25;
+const FINALIZATION_CONTINUE_DELAY = 1_000;
+const backupQueue = [];
+let backupRunning = false;
+let backupAvailability;
+let expiryContinuation;
+
+// Sao luu sau khi ket thuc ky thi chay tach khoi worker cham bai de khong lam nghen API.
+async function backupIsAvailable() {
+  if (backupAvailability === undefined) backupAvailability = databaseBackupAvailable();
+  return backupAvailability;
+}
+
+function queueCompetitionBackup(competition) {
+  // Vong da duoc chot va giao dich da commit truoc khi ham nay duoc goi.
+  // Chi dua yeu cau vao hang doi; tuyet doi khong cho sao luu lam cham viec chot ket qua.
+  if (!competition?.competitionName || backupQueue.some(item => item.competitionName === competition.competitionName)) return;
+  backupQueue.push(competition);
+  void processBackupQueue();
+}
+
+async function processBackupQueue() {
+  if (backupRunning) return;
+  backupRunning = true;
+  try {
+    while (backupQueue.length) {
+      const competition = backupQueue.shift();
+      try {
+        if (!await backupIsAvailable()) {
+          console.warn('Bo qua sao luu tu dong: chua tim thay mysqldump. Cau hinh MYSQLDUMP_PATH de bat lai.');
+          continue;
+        }
+        await createDatabaseBackup({ reason: 'after_competition_end', competitionName: competition.competitionName });
+        console.info('Da sao luu database sau khi ket thuc ky thi:', competition.competitionName);
+      } catch (error) {
+        // Sao luu that bai chi duoc ghi log; khong duoc lam dung chuc nang thi hoac server.
+        console.error('Khong the sao luu sau khi ket thuc ky thi:', error.code || error.name);
+      }
+    }
+  } finally {
+    backupRunning = false;
+  }
+}
+
+function scheduleExpiryContinuation() {
+  if (expiryContinuation) return;
+  expiryContinuation = setTimeout(() => { expiryContinuation = undefined; checkExpired(); }, FINALIZATION_CONTINUE_DELAY);
+  expiryContinuation.unref();
+}
+
 function checkExpired() {
-  // Không chạy chồng các đợt quét; khóa bản ghi và ràng buộc kết quả vẫn bảo vệ khi có nhiều máy chủ.
+  // Xu ly theo lo nho de luc nhieu thi sinh dong thoi nop bai, MySQL van con tai nguyen cho API.
   if (expiryRun) return;
-  expiryRun = finalizeExpiredSessions(pool, { limit: 1000 }).then(async result => {
-    if (result.failed) console.error('Có bài hết giờ chưa chốt được; sẽ thử lại ở đợt sau.');
-    const rounds = await finalizeEndedRounds(pool, { limit: 1000, onCompetitionFinished: competition => createDatabaseBackup({ reason: 'after_competition_end', competitionName: competition.competitionName }) });
-    if (rounds.failed) console.error('Có vòng thi chưa thể tự chốt; sẽ thử lại ở đợt sau.');
+  expiryRun = finalizeExpiredSessions(pool, { limit: FINALIZATION_BATCH_SIZE }).then(async result => {
+    if (result.processed || result.failed) console.info('Cham bai het gio:', result.processed, 'thanh cong,', result.failed, 'that bai.');
+    if (result.failed) console.error('Co bai het gio chua chot duoc; se thu lai o dot sau.');
+    if (result.processed === FINALIZATION_BATCH_SIZE) scheduleExpiryContinuation();
+    const rounds = await finalizeEndedRounds(pool, { limit: FINALIZATION_BATCH_SIZE, onCompetitionFinished: queueCompetitionBackup });
+    if (rounds.finalized || rounds.waiting || rounds.failed) console.info('Chot vong thi:', rounds.finalized, 'thanh cong,', rounds.waiting, 'dang cho,', rounds.failed, 'that bai.');
+    if (rounds.failed) console.error('Co vong thi chua the tu chot; se thu lai o dot sau.');
   }).catch(error => console.error('Exam expiry worker:', error.code || error.name)).finally(() => { expiryRun = null; });
 }
+
 async function startServer() {
   try {
     // Kiểm tra cấu hình xác thực trước khi khởi tạo dữ liệu; chỉ nhận yêu cầu khi cơ sở dữ liệu sẵn sàng.
@@ -46,6 +100,7 @@ async function startServer() {
 // Ngừng nhận yêu cầu và chờ máy chủ HTTP đóng trước khi giải phóng kết nối cơ sở dữ liệu.
 async function shutdown() {
   clearInterval(expiryTimer);
+  clearTimeout(expiryContinuation);
   if (server) await new Promise((resolve) => server.close(resolve));
   if (expiryRun) await expiryRun;
   await closeDatabase();

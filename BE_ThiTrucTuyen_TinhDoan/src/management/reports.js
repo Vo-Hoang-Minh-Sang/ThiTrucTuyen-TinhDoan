@@ -63,9 +63,10 @@ async function buildHierarchy(pool, user, competitionId, roundId, organizationId
   if (user.role === 'teacher') { where.push('EXISTS (SELECT 1 FROM teacher_competitions tc WHERE tc.competition_id=s.competition_id AND tc.user_id=?)'); values.push(user.id); }
   if (dates.from) { where.push('s.started_at>=?'); values.push(`${dates.from} 00:00:00`); }
   if (dates.to) { where.push('s.started_at<DATE_ADD(?,INTERVAL 1 DAY)'); values.push(`${dates.to} 00:00:00`); }
-  const [sessions] = await pool.query(`SELECT s.user_id AS userId,s.competition_id AS competitionId,c.name AS competitionName,s.round_id AS roundId,s.score,
-    rd.round_number AS roundNumber,rd.name AS roundName,d.id AS unitId,d.ten AS unitName
+  const [sessions] = await pool.query(`SELECT s.user_id AS userId,s.competition_id AS competitionId,c.name AS competitionName,s.round_id AS roundId,
+    COALESCE(result.score,s.score) AS score,rd.round_number AS roundNumber,rd.name AS roundName,d.id AS unitId,d.ten AS unitName
     FROM user_exam_sessions s JOIN competitions c ON c.id=s.competition_id
+    LEFT JOIN results result ON result.session_id=s.id
     LEFT JOIN rounds rd ON rd.id=s.round_id LEFT JOIN donvi d ON d.id=(SELECT cr.unit_id FROM competition_registrations cr WHERE cr.user_id=s.user_id AND cr.competition_id=s.competition_id LIMIT 1)
     WHERE ${where.length ? where.join(' AND ') : '1=1'}`, values);
   // Khi không chọn kỳ thi, vẫn giữ đủ cấu trúc: tổng chung, từng kỳ thi, vòng và đơn vị.
@@ -134,9 +135,10 @@ export async function buildReport(pool, user, query) {
   const [[registrations], [attempts]] = await Promise.all([
     pool.query(`SELECT r.unit_id AS unitId,d.ten AS name,COUNT(*) AS registrations FROM competition_registrations r JOIN competitions c ON c.id=r.competition_id LEFT JOIN donvi d ON d.id=r.unit_id ${registrationFilter.sql} GROUP BY r.unit_id,d.ten`, registrationFilter.values),
     pool.query(`SELECT ${resolvedUnit} AS unitId,d.ten AS name,COUNT(*) AS attempts,
-      SUM(s.finished_at IS NOT NULL AND s.score IS NOT NULL) AS completed,
-      COALESCE(SUM(CASE WHEN s.finished_at IS NOT NULL THEN s.score ELSE 0 END),0) AS scoreTotal
+      SUM(s.finished_at IS NOT NULL AND COALESCE(result.score,s.score) IS NOT NULL) AS completed,
+      COALESCE(SUM(CASE WHEN s.finished_at IS NOT NULL THEN COALESCE(result.score,s.score) ELSE 0 END),0) AS scoreTotal
       FROM user_exam_sessions s JOIN exams e ON e.id=s.exam_id
+      LEFT JOIN results result ON result.session_id=s.id
       LEFT JOIN rounds rd ON rd.id=COALESCE(s.round_id,e.round_id)
       JOIN competitions c ON c.id=${resolvedCompetition} JOIN users u ON u.id=s.user_id
       LEFT JOIN competition_registrations r ON r.user_id=s.user_id AND r.competition_id=c.id
@@ -172,16 +174,28 @@ async function lookupResults(pool, user, query) {
   if (keyword) { where.push('u.hoten LIKE ?'); values.push(`%${keyword}%`); }
   if (user.role === 'teacher') { requirePermission(user, 'reports'); where.push('EXISTS (SELECT 1 FROM teacher_competitions tc WHERE tc.competition_id=s.competition_id AND tc.user_id=?)'); values.push(user.id); }
   if (user.role === 'candidate') { where.push('s.user_id=?'); values.push(user.id); }
-  const [rows] = await pool.query(`SELECT s.id,s.user_id AS userId,u.hoten,u.email,u.dienthoai,d.ten AS unitName,s.finished_at AS finishedAt,s.score,
-    TIMESTAMPDIFF(SECOND,s.started_at,s.finished_at) AS durationSeconds
+  const [rows] = await pool.query(`SELECT s.id,s.user_id AS userId,u.hoten,u.email,u.dienthoai,d.ten AS unitName,s.finished_at AS finishedAt,
+    COALESCE(result.score,s.score) AS score,result.round_rank AS roundRank,
+    COALESCE(result.duration_seconds,TIMESTAMPDIFF(SECOND,s.started_at,s.finished_at)) AS durationSeconds
     FROM user_exam_sessions s JOIN users u ON u.id=s.user_id JOIN competitions c ON c.id=s.competition_id
+    LEFT JOIN results result ON result.session_id=s.id
     LEFT JOIN competition_registrations cr ON cr.user_id=s.user_id AND cr.competition_id=s.competition_id
     LEFT JOIN donvi d ON d.id=cr.unit_id WHERE ${where.join(' AND ')}`, values);
   const ordered = [...rows].sort((a, b) => Number(b.score) - Number(a.score) || Number(a.durationSeconds) - Number(b.durationSeconds) || new Date(a.finishedAt) - new Date(b.finishedAt) || Number(a.id) - Number(b.id));
-  const best = [...new Map(ordered.map(item => [String(item.userId), item])).values()];
-  const ranked = best.sort((a, b) => Number(b.score) - Number(a.score) || Number(a.durationSeconds) - Number(b.durationSeconds) || new Date(a.finishedAt) - new Date(b.finishedAt) || Number(a.id) - Number(b.id));
-  // Hạng được xác định trước khi cắt Top để cùng một kết quả có thứ hạng thống nhất ở giao diện và tệp xuất.
-  return (top ? ranked.slice(0, top) : ranked).map((item, index) => ({ rank: index + 1, id: item.id, fullName: item.hoten, unitName: item.unitName || 'Chua chon don vi', email: item.email || '', phone: item.dienthoai || '', durationSeconds: Number(item.durationSeconds), finishedAt: item.finishedAt, score: Number(item.score) }));
+  // Sau khi chốt vòng, roundRank xác định đúng lượt được công bố chính thức.
+  // Trước khi chốt, chưa có roundRank nên vẫn lấy lượt điểm cao nhất.
+  const official = ordered.filter(item => item.roundRank !== null && item.roundRank !== undefined);
+  const source = official.length ? official : ordered;
+  const selected = [...new Map(source.map(item => [String(item.userId), item])).values()];
+  const ranked = selected.sort((a, b) => official.length
+    ? Number(a.roundRank) - Number(b.roundRank) || Number(a.id) - Number(b.id)
+    : Number(b.score) - Number(a.score) || Number(a.durationSeconds) - Number(b.durationSeconds) || new Date(a.finishedAt) - new Date(b.finishedAt) || Number(a.id) - Number(b.id));
+  return (top ? ranked.slice(0, top) : ranked).map((item, index) => ({
+    rank: official.length ? Number(item.roundRank) : index + 1,
+    id: item.id, fullName: item.hoten, unitName: item.unitName || 'Chua chon don vi',
+    email: item.email || '', phone: item.dienthoai || '', durationSeconds: Number(item.durationSeconds),
+    finishedAt: item.finishedAt, score: Number(item.score)
+  }));
 }
 
 export function createReportsRouter({ pool }) {

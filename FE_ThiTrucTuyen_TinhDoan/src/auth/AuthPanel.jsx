@@ -69,7 +69,7 @@ export default function AuthPanel({ units = [], unitsError, onAuthenticated }) {
       <button type="submit" disabled={mode === 'register' && !units.length}>{loading ? '\u0110ang x\u1eed l\u00fd\u2026' : mode === 'forgot' ? 'G\u1eedi m\u00e3 OTP' : mode === 'verify' ? 'X\u00e1c nh\u1eadn t\u00e0i kho\u1ea3n' : mode === 'reset' ? '\u0110\u1eb7t l\u1ea1i m\u1eadt kh\u1ea9u' : titles[mode]}</button>
     </fieldset></form>
     {message && <p className={`auth-message ${isError ? 'error-message' : ''}`} role={isError ? 'alert' : 'status'}>{message}</p>}
-    <div className="login-links">{mode === 'login' ? <><button disabled={loading} onClick={() => changeMode('register')}>{'\u0110\u0103ng k\u00fd t\u00e0i kho\u1ea3n'}</button><button disabled={loading} onClick={() => changeMode('forgot')}>{'Qu\u00ean m\u1eadt kh\u1ea9u?'}</button></> : <>{['verify', 'reset'].includes(mode) && <button disabled={loading} onClick={resend}>{'G\u1eedi l\u1ea1i OTP'}</button>}<button disabled={loading} onClick={() => changeMode('login')}>{'Quay l\u1ea1i \u0111\u0103ng nh\u1eadp'}</button></>}</div>
+    <div className="login-links">{mode === 'login' ? <><button type="button" disabled title={'\u0110\u0103ng k\u00fd t\u00e0i kho\u1ea3n hi\u1ec7n t\u1ea1i t\u1ea1m kh\u00f3a.'}>{'\u0110\u0103ng k\u00fd t\u00e0i kho\u1ea3n'}</button><button disabled={loading} onClick={() => changeMode('forgot')}>{'Qu\u00ean m\u1eadt kh\u1ea9u?'}</button></> : <>{['verify', 'reset'].includes(mode) && <button disabled={loading} onClick={resend}>{'G\u1eedi l\u1ea1i OTP'}</button>}<button disabled={loading} onClick={() => changeMode('login')}>{'Quay l\u1ea1i \u0111\u0103ng nh\u1eadp'}</button></>}</div>
   </section>;
 }
 

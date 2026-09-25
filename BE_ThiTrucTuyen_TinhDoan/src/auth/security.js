@@ -43,6 +43,22 @@ export function createRateLimiter({ now = Date.now, maxEntries = 10000 } = {}) {
       if (bucket.count >= limit) return { allowed: false, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - time) / 1000)) };
       bucket.count += 1;
       return { allowed: true };
+    },
+    // Kiểm tra giới hạn mà không tăng bộ đếm; dùng trước khi băm mật khẩu để đăng nhập đúng không bị tính là lỗi.
+    peek(scope, identity, limit) {
+      const time = now();
+      const key = `${scope}:${createHash('sha256').update(String(identity)).digest('hex')}`;
+      for (const [existingKey, bucket] of buckets) {
+        if (bucket.resetAt <= time) buckets.delete(existingKey);
+      }
+      const bucket = buckets.get(key);
+      if (!bucket || bucket.count < limit) return { allowed: true };
+      return { allowed: false, retryAfter: Math.max(1, Math.ceil((bucket.resetAt - time) / 1000)) };
+    },
+    // Đăng nhập thành công xóa đếm lỗi của chính tài khoản, không xóa đếm IP để vẫn hạn chế tấn công diện rộng.
+    reset(scope, identity) {
+      const key = `${scope}:${createHash('sha256').update(String(identity)).digest('hex')}`;
+      buckets.delete(key);
     }
   };
 }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -13,8 +13,26 @@ const config = () => ({ host: process.env.DB_HOST || 'localhost', port: Number(p
 const backupDirectory = () => path.resolve(process.env.BACKUP_DIR || fileURLToPath(new URL('../../../backups/database/', import.meta.url)));
 const executable = () => process.env.MYSQLDUMP_PATH || (process.platform === 'win32' ? 'C:\\Program Files\\MySQL\\MySQL Server 8.0\\bin\\mysqldump.exe' : 'mysqldump');
 
+// Kiem tra truoc khi mo ket noi MySQL de backup thieu cong cu khong lam tang tai khi ky thi ket thuc.
+export async function databaseBackupAvailable() {
+  const command = executable();
+  if (path.isAbsolute(command)) {
+    try { await access(command); return true; } catch { return false; }
+  }
+  return new Promise(resolve => {
+    const child = spawn(command, ['--version'], { windowsHide: true, stdio: 'ignore' });
+    child.once('error', () => resolve(false));
+    child.once('exit', code => resolve(code === 0));
+  });
+}
+
 // Tạo bản sao nhất quán bằng mysqldump, không đưa mật khẩu vào dòng lệnh hoặc log ứng dụng.
 export async function createDatabaseBackup({ reason = 'manual', competitionName = null } = {}) {
+  if (!await databaseBackupAvailable()) {
+    const error = new Error('MYSQLDUMP_NOT_FOUND');
+    error.code = 'MYSQLDUMP_NOT_FOUND';
+    throw error;
+  }
   const database = config();
   const directory = backupDirectory();
   let temporary;

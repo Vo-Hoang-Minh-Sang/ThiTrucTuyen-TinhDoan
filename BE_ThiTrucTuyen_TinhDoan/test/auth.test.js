@@ -256,6 +256,15 @@ test('login is throttled and malformed/legacy tokens and input types are rejecte
   assert.equal((await api.request('/me', undefined, legacyToken)).status, 401);
 });
 
+test('successful logins do not consume the failed-login limit', async t => {
+  const api = await harness(t, { otpEnabled: false });
+  assert.equal((await api.request('/register', registration)).status, 201);
+  for (let index = 0; index < 7; index += 1) {
+    const login = await api.request('/login', { identifier: registration.email, password: registration.password });
+    assert.equal(login.status, 200);
+  }
+});
+
 test('OTP defaults off and public registration cannot grant teacher/admin permissions', async t => {
   assert.equal(validateAuthConfiguration(env).otpEnabled, false);
   const api = await harness(t, { otpEnabled: false, mailer: () => { throw new Error('must never send'); } });

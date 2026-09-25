@@ -11,6 +11,8 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:5000',
         changeOrigin: true,
+        // Gửi X-Forwarded-For để backend nhận biết IP thật của từng thí sinh.
+        xfwd: true,
         timeout: 30_000,
         proxyTimeout: 30_000,
         configure(proxy) {
